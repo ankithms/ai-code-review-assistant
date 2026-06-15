@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
     PullRequest,
@@ -62,3 +62,25 @@ def save_review(
     db.refresh(review)
 
     return review
+
+
+def get_review_by_id(
+    db,
+    review_id: int
+):
+    return (
+        db.query(Review)
+        .options(
+            joinedload(Review.issues)
+        )
+        .filter(
+            Review.id == review_id
+        )
+        .first()
+    )
+
+
+def get_all_reviews(
+    db
+):
+    return db.query(Review).all()

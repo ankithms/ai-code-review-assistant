@@ -28,6 +28,11 @@ def review_code(diff_text):
                     - readability
                     - edge cases
 
+                    Severity MUST be one of:
+                    - high
+                    - medium
+                    - low
+
                     Code Diff:
                     {diff_text}
                     """

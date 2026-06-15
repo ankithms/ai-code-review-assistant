@@ -5,6 +5,7 @@ import os
 
 import requests
 from fastapi import APIRouter, HTTPException, Request
+from fastapi import BackgroundTasks
 
 from app.github.github_service import (
     get_pr_files,
@@ -15,10 +16,16 @@ from app.db.database import SessionLocal
 from app.repositories.review_repository import save_review
 from app.schemas.output import PullRequestSchema
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/webhooks",
+    tags=["webhooks"]
+)
 
 @router.post("/github")
-async def github_webhook(request: Request):
+async def github_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
     body = await request.body()
     verify_github_signature(request, body)
 
@@ -56,86 +63,10 @@ async def github_webhook(request: Request):
 
     files_url = pull_request["url"] + "/files"
 
-    try:
-        files = get_pr_files(files_url, token)
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to fetch pull request files from GitHub",
-        ) from exc
-
-    if not isinstance(files, list):
-        raise HTTPException(
-            status_code=502,
-            detail="GitHub returned an unexpected files response",
-        )
-
-    full_diff = ""
-
-    for file in files:
-
-        patch = file.get("patch")
-
-        if patch:
-
-            full_diff += f"\n\nFILE: {file['filename']}\n"
-            full_diff += patch
-
-    if not full_diff:
-        return {
-            "status": "ignored",
-            "reason": "No reviewable diff found",
-        }
-
-    print("\nSending diff to AI...\n")
-
-    try:
-        ai_review = review_code(full_diff)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="AI review failed",
-        ) from exc
-
-    pr_schema = PullRequestSchema(
-        github_pr_id=pull_request["id"],
-        title=pull_request["title"],
-        repository=payload["repository"]["full_name"],
-        author=pull_request["user"]["login"],
+    background_tasks.add_task(
+        process_pull_request,
+        payload,
     )
-
-    db = SessionLocal()
-
-    try:
-        save_review(
-            db=db,
-            pr_data=pr_schema,
-            review_data=ai_review,
-        )
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to save review",
-        ) from exc
-    finally:
-        db.close()
-
-    comments_url = pull_request["comments_url"]
-
-    formatted_review = format_review(ai_review)
-
-    try:
-        comment = post_pr_comment(
-            comments_url=comments_url,
-            access_token=token,
-            body=formatted_review
-        )
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to post pull request comment to GitHub",
-        ) from exc
 
     return {
         "status": "success"
@@ -186,3 +117,48 @@ def format_review(review):
         )
 
     return "\n".join(lines)
+
+
+def process_pull_request(payload):
+    token = os.getenv("GITHUB_ACCESS_TOKEN")
+
+    pull_request = payload["pull_request"]
+
+    files_url = pull_request["url"] + "/files"
+
+    files = get_pr_files(files_url, token)
+
+    full_diff = ""
+
+    for file in files:
+        patch = file.get("patch")
+
+        if patch:
+            full_diff += f"\n\nFILE: {file['filename']}\n"
+            full_diff += patch
+
+    ai_review = review_code(full_diff)
+
+    pr_schema = PullRequestSchema(
+        github_pr_id=pull_request["id"],
+        title=pull_request["title"],
+        repository=payload["repository"]["full_name"],
+        author=pull_request["user"]["login"],
+    )
+
+    db = SessionLocal()
+
+    try:
+        save_review(
+            db=db,
+            pr_data=pr_schema,
+            review_data=ai_review,
+        )
+    finally:
+        db.close()
+
+    post_pr_comment(
+        comments_url=pull_request["comments_url"],
+        access_token=token,
+        body=format_review(ai_review),
+    )
