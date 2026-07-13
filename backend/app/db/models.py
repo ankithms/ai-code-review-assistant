@@ -38,6 +38,7 @@ class Review(Base):
     )
 
     summary = Column(Text)
+    commit_sha = Column(String, nullable=False)
 
     pull_request = relationship(
         "PullRequest",
@@ -64,6 +65,7 @@ class Issue(Base):
     category = Column(String(50))
     file = Column(String(255))
     comment = Column(Text)
+    line = Column(Integer)
 
     review = relationship(
         "Review",

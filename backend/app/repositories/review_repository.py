@@ -16,6 +16,7 @@ def save_review(
     db: Session,
     pr_data: PullRequestSchema,
     review_data: ReviewResponseSchema,
+    commit_sha
 ):
     pr = (
         db.query(PullRequest)
@@ -41,6 +42,7 @@ def save_review(
     review = Review(
         pr_id=pr.id,
         summary=review_data.summary,
+        commit_sha=commit_sha
     )
 
     db.add(review)
@@ -53,6 +55,7 @@ def save_review(
             severity=issue_data.severity,
             category=issue_data.category,
             file=issue_data.file,
+            line=issue_data.line,
             comment=issue_data.comment,
         )
 

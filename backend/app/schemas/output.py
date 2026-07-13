@@ -21,6 +21,7 @@ class IssueSchema(BaseModel):
     severity: SeverityEnum
     category: CategoryEnum
     file: str
+    line: int | None = None
     comment: str
 
 
