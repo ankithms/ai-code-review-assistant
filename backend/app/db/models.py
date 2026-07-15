@@ -1,6 +1,7 @@
 from sqlalchemy import (
     BigInteger,
     Column,
+    DateTime,
     Integer,
     String,
     Text,
@@ -8,6 +9,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import declarative_base
+from datetime import UTC, datetime
 
 Base = declarative_base()
 
@@ -71,3 +73,21 @@ class Issue(Base):
         "Review",
         back_populates="issues"
     )
+
+
+class ReviewJob(Base):
+    __tablename__ = "review_jobs"
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(255), nullable=False)
+    pull_request_number = Column(Integer, nullable=False)
+    commit_sha = Column(String, nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="PENDING")
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+    error_message = Column(Text)

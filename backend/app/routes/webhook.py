@@ -2,26 +2,22 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 
-import requests
-from fastapi import APIRouter, HTTPException, Request
-from fastapi import BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
-from app.github.summary_formatter import format_review_summary
+from app.db.session import get_db
 from app.db.models import Review
+from app.repositories.review_job_repository import (
+    SUCCESS,
+    create_review_job,
+    get_active_review_job_by_commit,
+    get_latest_review_job_by_commit,
+    mark_review_job_failed,
+)
+from app.tasks.review_tasks import process_review_job
 
 logger = logging.getLogger(__name__)
-
-from app.github.github_service import (
-    get_pr_files,
-    post_pr_comment,
-    post_inline_comment
-)
-from app.ai.review_service import review_code
-from app.db.database import SessionLocal
-from app.repositories.review_repository import save_review
-from app.schemas.output import PullRequestSchema
 
 router = APIRouter(
     prefix="/webhooks",
@@ -31,7 +27,7 @@ router = APIRouter(
 @router.post("/github")
 async def github_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
 ):
     body = await request.body()
     verify_github_signature(request, body)
@@ -53,48 +49,85 @@ async def github_webhook(
         }
 
     pull_request = payload.get("pull_request")
-    commit_id = pull_request["head"]["sha"]
-
-    db = SessionLocal()
-    
-    existing_review = (
-        db.query(Review)
-        .filter(Review.commit_sha == commit_id)
-        .first()
-    )
-
-    if existing_review:
-        print("Commit already reviewed")
-        return  
-
     if not pull_request:
         raise HTTPException(
             status_code=400,
             detail="Webhook payload is missing pull_request",
         )
 
-    token = os.getenv("GITHUB_ACCESS_TOKEN")
+    repository = payload.get("repository") or {}
+    repository_full_name = repository.get("full_name")
+    pull_request_number = pull_request.get("number")
+    commit_sha = (pull_request.get("head") or {}).get("sha")
 
-    if not token:
+    if not repository_full_name or not pull_request_number or not commit_sha:
         raise HTTPException(
-            status_code=500,
-            detail="GITHUB_ACCESS_TOKEN is not configured",
+            status_code=400,
+            detail="Webhook payload is missing repository, pull request number, or commit sha",
         )
 
-    files_url = pull_request["url"] + "/files"
+    active_job = get_active_review_job_by_commit(db, commit_sha)
 
-    background_tasks.add_task(
-        process_pull_request,
-        payload,
-        commit_id,
+    if active_job:
+        logger.info(
+            "Commit %s already has active review job %s",
+            commit_sha,
+            active_job.id,
+        )
+        return {
+            "status": "queued",
+            "job_id": active_job.id,
+        }
+
+    existing_review = (
+        db.query(Review)
+        .filter(Review.commit_sha == commit_sha)
+        .first()
     )
 
+    if existing_review:
+        latest_job = get_latest_review_job_by_commit(db, commit_sha)
+
+        if latest_job and latest_job.status == SUCCESS:
+            logger.info("Commit %s already reviewed and posted", commit_sha)
+            return {
+                "status": "ignored",
+                "reason": "commit_already_reviewed",
+                "review_id": existing_review.id,
+            }
+
+        logger.info(
+            "Commit %s has saved review %s but no successful posting job; enqueueing retry",
+            commit_sha,
+            existing_review.id,
+        )
+
+    job = create_review_job(
+        db=db,
+        repository=repository_full_name,
+        pull_request_number=pull_request_number,
+        commit_sha=commit_sha,
+    )
+
+    try:
+        process_review_job.send(job.id)
+    except Exception as exc:
+        mark_review_job_failed(db, job, str(exc))
+        logger.exception("Failed to enqueue review job %s", job.id)
+        raise HTTPException(
+            status_code=503,
+            detail="Review queue is unavailable",
+        ) from exc
+
     return {
-        "status": "success"
+        "status": "queued",
+        "job_id": job.id,
     }
 
 
 def verify_github_signature(request, body):
+    import os
+
     secret = os.getenv("GITHUB_WEBHOOK_SECRET")
 
     if not secret:
@@ -119,92 +152,3 @@ def verify_github_signature(request, body):
             status_code=401,
             detail="Invalid GitHub webhook signature",
         )
-
-
-def process_pull_request(payload, commit_id):
-    logger.info("Starting process_pull_request")
-    token = os.getenv("GITHUB_ACCESS_TOKEN")
-
-    pull_request = payload["pull_request"]
-    logger.info(f"Processing PR #{pull_request['number']}")
-
-    files_url = pull_request["url"] + "/files"
-
-    files = get_pr_files(files_url, token)
-    logger.info(f"Retrieved {len(files)} files")
-
-    full_diff = ""
-
-    for file in files:
-        patch = file["patch"]
-
-        if patch:
-            full_diff += f"\n\nFILE: {file['filename']}\n"
-            full_diff += patch
-
-    logger.info("Calling AI review service")
-    ai_review = review_code(full_diff)
-    logger.info(f"AI review returned {len(ai_review.issues)} issues")
-
-    pr_schema = PullRequestSchema(
-        github_pr_id=pull_request["id"],
-        title=pull_request["title"],
-        repository=payload["repository"]["full_name"],
-        author=pull_request["user"]["login"],
-    )
-
-    db = SessionLocal()
-
-    try:
-        save_review(
-            db=db,
-            pr_data=pr_schema,
-            review_data=ai_review,
-            commit_sha=commit_id
-        )
-    finally:
-        db.close()
-
-    review_comments_url = pull_request["review_comments_url"].replace("{/number}", "")
-    logger.info(f"Review comments URL: {review_comments_url}")
-    logger.info(f"Commit ID: {commit_id}")
-    
-    # Post inline comments for each issue
-    for issue in ai_review.issues:
-        logger.info(f"Processing issue: file={issue.file}, line={issue.line}, category={issue.category}")
-        if issue.file and issue.line:
-            try:
-                post_inline_comment(
-                    comments_url=review_comments_url,
-                    access_token=token,
-                    commit_id=commit_id,
-                    file_path=issue.file,
-                    line=issue.line,
-                    body=(
-                        f"**{issue.severity.upper()}** "
-                        f"[{issue.category.value.replace('_', ' ').title()}] "
-                        f"{issue.comment}"
-                    )
-                )
-                logger.info(f"Posted inline comment for {issue.file}:{issue.line}")
-            except Exception as e:
-                logger.error(f"Failed to post inline comment: {e}", exc_info=True)
-        else:
-            logger.warning(f"Skipping issue without file/line: file={issue.file}, line={issue.line}")
-
-    # Post general review summary as a PR comment
-    try:
-        summary = format_review_summary(
-            review=ai_review,
-            files_reviewed=len(files)
-        )
-
-        post_pr_comment(
-            comments_url=pull_request["comments_url"],
-            access_token=token,
-            body=summary,
-        )
-        logger.info("Posted general review comment")
-    except Exception as e:
-        logger.error(f"Failed to post general comment: {e}", exc_info=True)
-        

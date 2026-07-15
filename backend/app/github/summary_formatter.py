@@ -3,7 +3,7 @@ from collections import Counter
 
 def format_review_summary(review, files_reviewed: int):
     severity_counts = Counter(
-        issue.severity.value
+        _enum_value(issue.severity)
         for issue in review.issues
     )
 
@@ -16,7 +16,7 @@ def format_review_summary(review, files_reviewed: int):
     seen = set()
 
     for issue in review.issues:
-        finding = issue.category.value.replace("-", " ").title()
+        finding = _format_category(issue.category)
 
         if finding not in seen:
             seen.add(finding)
@@ -27,7 +27,7 @@ def format_review_summary(review, files_reviewed: int):
 
     if high > 0:
         recommendation = "🚫 Changes requested before merge."
-    elif medium >= 0:
+    elif medium > 0:
         recommendation = "⚠️ Review recommended before merge."
     else:
         recommendation = "✅ Looks good overall."
@@ -51,3 +51,14 @@ Files Reviewed: {files_reviewed}
 
 {recommendation}
 """
+
+
+def _enum_value(value) -> str:
+    if hasattr(value, "value"):
+        return value.value
+
+    return str(value)
+
+
+def _format_category(category) -> str:
+    return _enum_value(category).replace("_", " ").replace("-", " ").title()
