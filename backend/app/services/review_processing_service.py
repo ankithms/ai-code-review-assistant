@@ -517,11 +517,65 @@ def _format_category(category) -> str:
 
 
 def _format_issue_comment_body(issue) -> str:
-    return (
-        f"**{_enum_value(issue.severity).upper()}** "
-        f"[{_format_category(issue.category)}] "
-        f"{issue.comment}"
+    problem, suggested_fix, example = _split_issue_comment_sections(issue.comment)
+    parts = [_enum_value(issue.severity).upper()]
+
+    confidence = _format_confidence(getattr(issue, "confidence", None))
+    if confidence is not None:
+        parts.append(f"Confidence: {confidence}%")
+
+    parts.extend(["", problem])
+
+    if suggested_fix:
+        parts.extend(["", "Suggested Fix:", suggested_fix])
+
+    if example:
+        parts.extend(["", "Example:", f"```\n{example}\n```"])
+
+    return "\n".join(parts)
+
+
+def _split_issue_comment_sections(comment: str) -> tuple[str, str | None, str | None]:
+    normalized_comment = comment.strip()
+    matches = list(
+        re.finditer(
+            r"\b(?P<label>Suggested\s+Fix|Example):",
+            normalized_comment,
+            flags=re.IGNORECASE,
+        )
     )
+
+    if not matches:
+        return normalized_comment, None, None
+
+    problem = normalized_comment[:matches[0].start()].strip()
+    sections = {
+        "suggested fix": None,
+        "example": None,
+    }
+
+    for index, match in enumerate(matches):
+        section_start = match.end()
+        section_end = matches[index + 1].start() if index + 1 < len(matches) else len(normalized_comment)
+        label = " ".join(match.group("label").lower().split())
+        sections[label] = normalized_comment[section_start:section_end].strip()
+
+    return problem, sections["suggested fix"], sections["example"]
+
+
+def _format_confidence(confidence) -> int | None:
+    if confidence is None:
+        return None
+
+    try:
+        numeric_confidence = float(confidence)
+    except (TypeError, ValueError):
+        return None
+
+    if 0 <= numeric_confidence <= 1:
+        numeric_confidence *= 100
+
+    return max(0, min(100, round(numeric_confidence)))
 
 
 def _post_inline_fallback_comment(

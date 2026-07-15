@@ -104,6 +104,7 @@ class GithubCommentPostingTests(unittest.TestCase):
                     severity="medium",
                     category="edge_case",
                     comment="This misses an edge case.",
+                    confidence=0.87,
                 )
             ],
             summary="Review summary",
@@ -130,8 +131,40 @@ class GithubCommentPostingTests(unittest.TestCase):
             )
 
         body = post_inline_comment.call_args.kwargs["body"]
-        self.assertIn("**MEDIUM**", body)
-        self.assertIn("[Edge Case]", body)
+        self.assertIn("MEDIUM\nConfidence: 87%", body)
+        self.assertIn("This misses an edge case.", body)
+        self.assertNotIn("[Edge Case]", body)
+
+    def test_formats_inline_comment_with_suggested_fix_and_example(self):
+        issue = SimpleNamespace(
+            severity=SeverityEnum.high,
+            category=CategoryEnum.bug,
+            confidence=0.94,
+            comment=(
+                "Dereferencing a nullable variable may raise an AttributeError."
+                "Suggested Fix: Check for None before accessing the attribute."
+                "Example: if user is not None:\n    print(user.name)"
+            ),
+        )
+
+        body = review_processing_service._format_issue_comment_body(issue)
+
+        self.assertEqual(
+            body,
+            "HIGH\n"
+            "Confidence: 94%\n"
+            "\n"
+            "Dereferencing a nullable variable may raise an AttributeError.\n"
+            "\n"
+            "Suggested Fix:\n"
+            "Check for None before accessing the attribute.\n"
+            "\n"
+            "Example:\n"
+            "```\n"
+            "if user is not None:\n"
+            "    print(user.name)\n"
+            "```",
+        )
 
     def test_skips_inline_comment_when_line_is_not_in_pr_diff(self):
         review = SimpleNamespace(

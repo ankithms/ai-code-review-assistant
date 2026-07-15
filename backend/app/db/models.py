@@ -2,6 +2,7 @@ from sqlalchemy import (
     BigInteger,
     Column,
     DateTime,
+    Float,
     Integer,
     String,
     Text,
@@ -68,6 +69,7 @@ class Issue(Base):
     file = Column(String(255))
     comment = Column(Text)
     line = Column(Integer)
+    confidence = Column(Float)
 
     review = relationship(
         "Review",

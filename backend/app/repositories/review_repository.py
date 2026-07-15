@@ -57,6 +57,7 @@ def save_review(
             file=issue_data.file,
             line=issue_data.line,
             comment=issue_data.comment,
+            confidence=issue_data.confidence,
         )
 
         db.add(issue)

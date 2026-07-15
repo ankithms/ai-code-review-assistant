@@ -17,9 +17,8 @@ llm = ChatGoogleGenerativeAI(
 model = llm.with_structured_output(ReviewResponseSchema)
 
 
-def review_code(diff_text):
-
-    prompt = f"""
+def review_service_prompt() -> str:
+    return f"""
 You are a senior software engineer acting as a code reviewer for a GitHub Pull Request.
 
 Your task is to review only the code introduced or modified in the provided diff.
@@ -57,6 +56,9 @@ For each issue, provide:
 - severity
 - category
 - a concise, specific comment explaining the problem and why it matters
+- a short suggested fix in the same comment under a "Suggested Fix:" label
+- a short "Example:" section when a minimal code example would make the fix clearer
+- a confidence score from 0.0 to 1.0 indicating how confident you are that this is a real issue
 
 Categories must be one of:
 - security
@@ -67,13 +69,31 @@ Categories must be one of:
 
 Output requirements:
 - Keep comments actionable and specific.
+- Keep each comment concise, ideally 2-6 lines.
+- Format each comment like this example:
+  Dereferencing a nullable variable may raise an AttributeError.
+
+  Suggested Fix:
+  Check for None before accessing the attribute.
+
+  Example:
+  if user is not None:
+      print(user.name)
+- Use a clear issue statement, then a separate "Suggested Fix:" section.
+- Prefer short, practical guidance over long explanations.
+- Do not include severity, category, confidence, file, or line in the comment text; those are separate structured fields.
+- Return a confidence score for each issue, using a number between 0.0 and 1.0.
 - Avoid duplicate findings.
 - Do not include vague suggestions like "consider improving this".
 - Be direct and evidence-based.
 
 Code Diff:
-{diff_text}
+{{diff_text}}
 """
+
+
+def review_code(diff_text):
+    prompt = review_service_prompt().format(diff_text=diff_text)
 
     try:
         response = model.invoke(prompt)
