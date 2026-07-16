@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from types import SimpleNamespace
 
 from app.ai.review_service import review_code
 from app.db.database import SessionLocal
@@ -19,7 +20,7 @@ from app.repositories.review_job_repository import (
     mark_review_job_running,
     mark_review_job_success,
 )
-from app.repositories.review_repository import save_review
+from app.repositories.review_repository import get_latest_review_for_pull_request, save_review
 from app.schemas.output import PullRequestSchema
 
 logger = logging.getLogger(__name__)
@@ -133,8 +134,24 @@ def _process_pull_request_review(db, job) -> None:
         author=pull_request["user"]["login"],
     )
 
+    previous_review = get_latest_review_for_pull_request(
+        db=db,
+        github_pr_id=pull_request["id"],
+        exclude_commit_sha=job.commit_sha,
+    )
+    issues_to_post = _filter_duplicate_issues(
+        new_issues=ai_review.issues,
+        previous_issues=previous_review.issues if previous_review else [],
+    )
+    if len(issues_to_post) != len(ai_review.issues):
+        logger.info(
+            "Filtered %s duplicate issues for PR #%s",
+            len(ai_review.issues) - len(issues_to_post),
+            job.pull_request_number,
+        )
+
     _post_github_comments(
-        review=ai_review,
+        review=_review_with_issues(ai_review, issues_to_post),
         files=files,
         files_reviewed=len(files),
         repository=job.repository,
@@ -162,6 +179,125 @@ def _build_diff(files: list[dict]) -> str:
             full_diff += patch
 
     return full_diff
+
+
+def _review_with_issues(review, issues):
+    if hasattr(review, "model_copy"):
+        return review.model_copy(update={"issues": issues})
+
+    return SimpleNamespace(
+        summary=getattr(review, "summary", ""),
+        issues=issues,
+    )
+
+
+def _filter_duplicate_issues(
+    new_issues,
+    previous_issues,
+):
+    filtered_issues = []
+
+    for issue in new_issues:
+        if _is_duplicate_issue(issue, previous_issues):
+            logger.info(
+                "Skipping duplicate issue: file=%s line=%s category=%s",
+                issue.file,
+                issue.line,
+                issue.category,
+            )
+            continue
+
+        filtered_issues.append(issue)
+
+    return filtered_issues
+
+
+def _is_duplicate_issue(issue, previous_issues) -> bool:
+    for previous_issue in previous_issues:
+        if _issues_match(issue, previous_issue):
+            return True
+
+    return False
+
+
+def _issues_match(issue, previous_issue) -> bool:
+    if _normalize_path(issue.file) != _normalize_path(previous_issue.file):
+        return False
+
+    if _enum_value(issue.category) != _enum_value(previous_issue.category):
+        return False
+
+    similarity = _issue_text_similarity(issue, previous_issue)
+
+    if _lines_are_nearby(issue.line, previous_issue.line):
+        return similarity >= 0.55
+
+    return similarity >= 0.82
+
+
+def _issue_text_similarity(issue, previous_issue) -> float:
+    issue_text = _issue_root_cause_text(issue)
+    previous_text = _issue_root_cause_text(previous_issue)
+    issue_tokens = _tokenize_for_similarity(issue_text)
+    previous_tokens = _tokenize_for_similarity(previous_text)
+
+    if not issue_tokens or not previous_tokens:
+        return 0
+
+    return len(issue_tokens & previous_tokens) / len(issue_tokens | previous_tokens)
+
+
+def _issue_root_cause_text(issue) -> str:
+    problem, _, impact, _ = _split_issue_comment_sections(issue.comment)
+    structured_impact = getattr(issue, "impact", None)
+    if structured_impact:
+        impact = structured_impact
+
+    return " ".join(part for part in (problem, impact) if part)
+
+
+def _tokenize_for_similarity(text: str) -> set[str]:
+    stop_words = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "be",
+        "because",
+        "being",
+        "by",
+        "can",
+        "for",
+        "from",
+        "in",
+        "is",
+        "it",
+        "of",
+        "or",
+        "that",
+        "the",
+        "this",
+        "to",
+        "will",
+        "with",
+    }
+    tokens = set(re.findall(r"[a-z0-9_]+", text.lower()))
+    return {token for token in tokens if len(token) > 2 and token not in stop_words}
+
+
+def _lines_are_nearby(line, previous_line) -> bool:
+    if line is None or previous_line is None:
+        return False
+
+    return abs(line - previous_line) <= 8
+
+
+def _normalize_path(file_path: str | None) -> str:
+    if not file_path:
+        return ""
+
+    return file_path.replace("\\", "/").lstrip("/")
 
 
 def _get_file_entry_for_issue(
@@ -517,17 +653,17 @@ def _format_category(category) -> str:
 
 
 def _format_issue_comment_body(issue) -> str:
-    problem, suggested_fix, example = _split_issue_comment_sections(issue.comment)
-    parts = [_enum_value(issue.severity).upper()]
-
-    confidence = _format_confidence(getattr(issue, "confidence", None))
-    if confidence is not None:
-        parts.append(f"Confidence: {confidence}%")
+    problem, suggested_fix, impact, example = _split_issue_comment_sections(issue.comment)
+    impact = getattr(issue, "impact", None) or impact
+    parts = [_format_issue_header(issue)]
 
     parts.extend(["", problem])
 
     if suggested_fix:
         parts.extend(["", "Suggested Fix:", suggested_fix])
+
+    if impact:
+        parts.extend(["", "Impact:", impact])
 
     if example:
         parts.extend(["", "Example:", f"```\n{example}\n```"])
@@ -535,22 +671,35 @@ def _format_issue_comment_body(issue) -> str:
     return "\n".join(parts)
 
 
-def _split_issue_comment_sections(comment: str) -> tuple[str, str | None, str | None]:
+def _format_issue_header(issue) -> str:
+    severity = _enum_value(issue.severity)
+    severity_markers = {
+        "high": "🔴",
+        "medium": "🟠",
+        "low": "🟡",
+    }
+
+    marker = severity_markers.get(severity.lower(), "⚪")
+    return f"{marker} {severity.upper()} · {_format_category(issue.category)}"
+
+
+def _split_issue_comment_sections(comment: str) -> tuple[str, str | None, str | None, str | None]:
     normalized_comment = comment.strip()
     matches = list(
         re.finditer(
-            r"\b(?P<label>Suggested\s+Fix|Example):",
+            r"(?P<label>Suggested\s+Fix|Impact|Example):",
             normalized_comment,
             flags=re.IGNORECASE,
         )
     )
 
     if not matches:
-        return normalized_comment, None, None
+        return normalized_comment, None, None, None
 
     problem = normalized_comment[:matches[0].start()].strip()
     sections = {
         "suggested fix": None,
+        "impact": None,
         "example": None,
     }
 
@@ -560,22 +709,7 @@ def _split_issue_comment_sections(comment: str) -> tuple[str, str | None, str | 
         label = " ".join(match.group("label").lower().split())
         sections[label] = normalized_comment[section_start:section_end].strip()
 
-    return problem, sections["suggested fix"], sections["example"]
-
-
-def _format_confidence(confidence) -> int | None:
-    if confidence is None:
-        return None
-
-    try:
-        numeric_confidence = float(confidence)
-    except (TypeError, ValueError):
-        return None
-
-    if 0 <= numeric_confidence <= 1:
-        numeric_confidence *= 100
-
-    return max(0, min(100, round(numeric_confidence)))
+    return problem, sections["suggested fix"], sections["impact"], sections["example"]
 
 
 def _post_inline_fallback_comment(

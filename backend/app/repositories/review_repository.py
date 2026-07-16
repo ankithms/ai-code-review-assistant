@@ -57,7 +57,7 @@ def save_review(
             file=issue_data.file,
             line=issue_data.line,
             comment=issue_data.comment,
-            confidence=issue_data.confidence,
+            impact=issue_data.impact,
         )
 
         db.add(issue)
@@ -88,3 +88,21 @@ def get_all_reviews(
     db
 ):
     return db.query(Review).all()
+
+
+def get_latest_review_for_pull_request(
+    db: Session,
+    github_pr_id: int,
+    exclude_commit_sha: str | None = None,
+) -> Review | None:
+    query = (
+        db.query(Review)
+        .join(PullRequest)
+        .options(joinedload(Review.issues))
+        .filter(PullRequest.github_pr_id == github_pr_id)
+    )
+
+    if exclude_commit_sha is not None:
+        query = query.filter(Review.commit_sha != exclude_commit_sha)
+
+    return query.order_by(Review.id.desc()).first()

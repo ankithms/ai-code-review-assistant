@@ -104,7 +104,7 @@ class GithubCommentPostingTests(unittest.TestCase):
                     severity="medium",
                     category="edge_case",
                     comment="This misses an edge case.",
-                    confidence=0.87,
+                    impact="The edge case can produce an incorrect result.",
                 )
             ],
             summary="Review summary",
@@ -131,19 +131,20 @@ class GithubCommentPostingTests(unittest.TestCase):
             )
 
         body = post_inline_comment.call_args.kwargs["body"]
-        self.assertIn("MEDIUM\nConfidence: 87%", body)
+        self.assertIn("🟠 MEDIUM · Edge Case", body)
         self.assertIn("This misses an edge case.", body)
-        self.assertNotIn("[Edge Case]", body)
+        self.assertIn("Impact:\nThe edge case can produce an incorrect result.", body)
+        self.assertNotIn("Confidence:", body)
 
-    def test_formats_inline_comment_with_suggested_fix_and_example(self):
+    def test_formats_inline_comment_with_suggested_fix_and_impact(self):
         issue = SimpleNamespace(
             severity=SeverityEnum.high,
             category=CategoryEnum.bug,
-            confidence=0.94,
+            impact="The HTTP request will never be executed because the application crashes first.",
             comment=(
-                "Dereferencing a nullable variable may raise an AttributeError."
-                "Suggested Fix: Check for None before accessing the attribute."
-                "Example: if user is not None:\n    print(user.name)"
+                "The 'requests' module is used without being imported. "
+                "This raises a NameError when the code path executes."
+                "Suggested Fix: import requests"
             ),
         )
 
@@ -151,20 +152,137 @@ class GithubCommentPostingTests(unittest.TestCase):
 
         self.assertEqual(
             body,
-            "HIGH\n"
-            "Confidence: 94%\n"
+            "🔴 HIGH · Bug\n"
             "\n"
-            "Dereferencing a nullable variable may raise an AttributeError.\n"
+            "The 'requests' module is used without being imported. "
+            "This raises a NameError when the code path executes.\n"
             "\n"
             "Suggested Fix:\n"
-            "Check for None before accessing the attribute.\n"
+            "import requests\n"
             "\n"
-            "Example:\n"
-            "```\n"
-            "if user is not None:\n"
-            "    print(user.name)\n"
-            "```",
+            "Impact:\n"
+            "The HTTP request will never be executed because the application crashes first.",
         )
+
+    def test_formats_inline_comment_with_impact_from_comment_text(self):
+        issue = SimpleNamespace(
+            severity=SeverityEnum.high,
+            category=CategoryEnum.bug,
+            comment=(
+                "The 'requests' module is used without being imported."
+                "Suggested Fix: import requests"
+                "Impact: The HTTP request will never be executed."
+            ),
+        )
+
+        body = review_processing_service._format_issue_comment_body(issue)
+
+        self.assertIn("Suggested Fix:\nimport requests", body)
+        self.assertIn("Impact:\nThe HTTP request will never be executed.", body)
+        self.assertNotIn("Confidence:", body)
+
+    def test_omits_example_section_when_comment_has_no_example(self):
+        issue = SimpleNamespace(
+            severity=SeverityEnum.low,
+            category=CategoryEnum.readability,
+            impact="Future maintainers may misunderstand the value's purpose.",
+            comment=(
+                "The variable name is unclear."
+                "Suggested Fix: Rename it to describe the value it stores."
+            ),
+        )
+
+        body = review_processing_service._format_issue_comment_body(issue)
+
+        self.assertIn("🟡 LOW · Readability", body)
+        self.assertIn("Suggested Fix:\nRename it to describe the value it stores.", body)
+        self.assertIn("Impact:\nFuture maintainers may misunderstand the value's purpose.", body)
+        self.assertNotIn("Example:", body)
+
+    def test_filters_duplicate_issue_from_latest_review(self):
+        previous_issues = [
+            SimpleNamespace(
+                file="calculator.py",
+                line=2,
+                category=CategoryEnum.bug,
+                comment="Dereferencing a nullable user may raise an AttributeError.",
+                impact="The request can crash when the user lookup returns None.",
+            )
+        ]
+        new_issues = [
+            SimpleNamespace(
+                file="calculator.py",
+                line=2,
+                category=CategoryEnum.bug,
+                comment=(
+                    "Dereferencing a nullable user may raise an AttributeError."
+                    "Suggested Fix: Check for None before accessing the attribute."
+                ),
+                impact="The request can crash when the user lookup returns None.",
+            ),
+            SimpleNamespace(
+                file="calculator.py",
+                line=5,
+                category=CategoryEnum.security,
+                comment="Interpolating user input into SQL can allow injection.",
+                impact="An attacker can alter the query and access unauthorized data.",
+            ),
+        ]
+
+        filtered = review_processing_service._filter_duplicate_issues(
+            new_issues=new_issues,
+            previous_issues=previous_issues,
+        )
+
+        self.assertEqual(filtered, [new_issues[1]])
+
+    def test_duplicate_detection_tolerates_shifted_lines(self):
+        previous_issue = SimpleNamespace(
+            file="calculator.py",
+            line=8,
+            category=CategoryEnum.bug,
+            comment="Dereferencing a nullable user may raise an AttributeError.",
+            impact="The request can crash when the user lookup returns None.",
+        )
+        new_issue = SimpleNamespace(
+            file="calculator.py",
+            line=16,
+            category=CategoryEnum.bug,
+            comment="Dereferencing a nullable user may raise an AttributeError.",
+            impact="The request can crash when the user lookup returns None.",
+        )
+
+        self.assertTrue(
+            review_processing_service._is_duplicate_issue(
+                new_issue,
+                [previous_issue],
+            )
+        )
+
+    def test_non_duplicate_issue_is_kept_when_latest_review_does_not_contain_it(self):
+        previous_issues = [
+            SimpleNamespace(
+                file="calculator.py",
+                line=5,
+                category=CategoryEnum.security,
+                comment="Interpolating user input into SQL can allow injection.",
+                impact="An attacker can alter the query and access unauthorized data.",
+            )
+        ]
+        new_issue = SimpleNamespace(
+            file="calculator.py",
+            line=2,
+            category=CategoryEnum.bug,
+            comment="Dereferencing a nullable user may raise an AttributeError.",
+            impact="The request can crash when the user lookup returns None.",
+        )
+
+        filtered = review_processing_service._filter_duplicate_issues(
+            new_issues=[new_issue],
+            previous_issues=previous_issues,
+        )
+
+        self.assertEqual(filtered, [new_issue])
 
     def test_skips_inline_comment_when_line_is_not_in_pr_diff(self):
         review = SimpleNamespace(

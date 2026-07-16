@@ -57,8 +57,8 @@ For each issue, provide:
 - category
 - a concise, specific comment explaining the problem and why it matters
 - a short suggested fix in the same comment under a "Suggested Fix:" label
-- a short "Example:" section when a minimal code example would make the fix clearer
-- a confidence score from 0.0 to 1.0 indicating how confident you are that this is a real issue
+- an optional short "Example:" section only when a minimal code example makes the fix materially clearer
+- a concise impact sentence explaining what breaks or why the issue matters
 
 Categories must be one of:
 - security
@@ -79,10 +79,12 @@ Output requirements:
   Example:
   if user is not None:
       print(user.name)
+- Include "Example:" only for concrete code transformations, such as null checks, missing imports, safer API usage, or corrected conditions.
+- Omit "Example:" for findings where code would not add value, such as unclear naming, broad readability guidance, or conceptual explanations.
 - Use a clear issue statement, then a separate "Suggested Fix:" section.
 - Prefer short, practical guidance over long explanations.
-- Do not include severity, category, confidence, file, or line in the comment text; those are separate structured fields.
-- Return a confidence score for each issue, using a number between 0.0 and 1.0.
+- Do not include severity, category, impact, file, or line in the comment text; those are separate structured fields.
+- Return an impact sentence for each issue.
 - Avoid duplicate findings.
 - Do not include vague suggestions like "consider improving this".
 - Be direct and evidence-based.

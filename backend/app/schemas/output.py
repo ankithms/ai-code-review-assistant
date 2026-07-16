@@ -23,7 +23,7 @@ class IssueSchema(BaseModel):
     file: str
     line: int | None = None
     comment: str
-    confidence: float | None = None
+    impact: str | None = None
 
 
 class ReviewResponseSchema(BaseModel):
