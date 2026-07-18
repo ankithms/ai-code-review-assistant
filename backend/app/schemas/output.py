@@ -17,6 +17,12 @@ class CategoryEnum(str, Enum):
     edge_case = "edge_case"
 
 
+class IssueStatus(str, Enum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+    IGNORED = "IGNORED"
+
+
 class IssueSchema(BaseModel):
     severity: SeverityEnum
     category: CategoryEnum

@@ -11,6 +11,8 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.orm import declarative_base
 from datetime import UTC, datetime
 
+from app.schemas.output import IssueStatus
+
 Base = declarative_base()
 
 
@@ -69,6 +71,11 @@ class Issue(Base):
     comment = Column(Text)
     line = Column(Integer)
     impact = Column(Text)
+    status = Column(
+        String(20),
+        nullable=False,
+        default=IssueStatus.OPEN.value,
+    )
 
     review = relationship(
         "Review",

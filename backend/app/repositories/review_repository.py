@@ -7,6 +7,7 @@ from app.db.models import (
 )
 
 from app.schemas.output import (
+    IssueStatus,
     PullRequestSchema,
     ReviewResponseSchema,
 )
@@ -58,6 +59,7 @@ def save_review(
             line=issue_data.line,
             comment=issue_data.comment,
             impact=issue_data.impact,
+            status=IssueStatus.OPEN.value,
         )
 
         db.add(issue)
@@ -106,3 +108,35 @@ def get_latest_review_for_pull_request(
         query = query.filter(Review.commit_sha != exclude_commit_sha)
 
     return query.order_by(Review.id.desc()).first()
+
+
+def get_issue_by_id(db: Session, issue_id: int) -> Issue | None:
+    return db.query(Issue).filter(Issue.id == issue_id).first()
+
+
+def _coerce_issue_status(status) -> IssueStatus:
+    if isinstance(status, IssueStatus):
+        return status
+
+    if isinstance(status, str):
+        normalized_status = status.strip().upper()
+        try:
+            return IssueStatus(normalized_status)
+        except ValueError as exc:
+            raise ValueError(f"Invalid issue status: {status}") from exc
+
+    raise ValueError(f"Invalid issue status: {status}")
+
+
+def update_issue_status(
+    db: Session,
+    issue: Issue,
+    status,
+) -> Issue:
+    resolved_status = _coerce_issue_status(status)
+    issue.status = resolved_status.value
+
+    db.commit()
+    db.refresh(issue)
+
+    return issue

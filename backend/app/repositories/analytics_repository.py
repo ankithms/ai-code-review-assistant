@@ -42,6 +42,24 @@ def get_analytics(db):
         .scalar()
     )
 
+    open_issues = (
+        db.query(func.count(Issue.id))
+        .filter(Issue.status == "OPEN")
+        .scalar()
+    )
+
+    resolved_issues = (
+        db.query(func.count(Issue.id))
+        .filter(Issue.status == "RESOLVED")
+        .scalar()
+    )
+
+    ignored_issues = (
+        db.query(func.count(Issue.id))
+        .filter(Issue.status == "IGNORED")
+        .scalar()
+    )
+
     return {
         "total_reviews": total_reviews,
         "total_pull_requests": total_pull_requests,
@@ -49,4 +67,7 @@ def get_analytics(db):
         "high_severity": high_severity,
         "medium_severity": medium_severity,
         "low_severity": low_severity,
+        "open_issues": open_issues,
+        "resolved_issues": resolved_issues,
+        "ignored_issues": ignored_issues,
     }
