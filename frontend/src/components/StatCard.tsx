@@ -1,6 +1,6 @@
 type StatCardProps = {
   title: string;
-  value: number;
+  value: number | string;
 };
 
 export default function StatCard({
@@ -8,16 +8,9 @@ export default function StatCard({
   value,
 }: StatCardProps) {
   return (
-    <div
-      style={{
-        border: "1px solid #ddd",
-        borderRadius: "12px",
-        padding: "20px",
-      }}
-    >
-      <h3>{title}</h3>
-
-      <h1>{value}</h1>
+    <div className="stat-card">
+      <p className="stat-card__label">{title}</p>
+      <p className="stat-card__value">{value}</p>
     </div>
   );
 }

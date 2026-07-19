@@ -26,7 +26,14 @@ class ReviewDetailResponse(BaseModel):
         "from_attributes": True
     }
 
+
+class TopProblematicFileResponse(BaseModel):
+    file: str
+    total_issues: int
+
+
 class AnalyticsResponse(BaseModel):
+    total_ai_reviews: int
     total_reviews: int
     total_pull_requests: int
     total_issues: int
@@ -36,6 +43,14 @@ class AnalyticsResponse(BaseModel):
     open_issues: int
     resolved_issues: int
     ignored_issues: int
+    bug_issues: int
+    security_issues: int
+    performance_issues: int
+    readability_issues: int
+    edge_case_issues: int
+    top_problematic_files: list[TopProblematicFileResponse]
+    average_issues_per_pull_request: float
+    average_review_processing_time_seconds: float | None
 
 
 class PullRequestResponse(BaseModel):
@@ -62,3 +77,12 @@ class ReviewListResponse(BaseModel):
 
 class IssueStatusUpdateRequest(BaseModel):
     status: IssueStatus
+
+
+class RepositoryResponse(BaseModel):
+    id: int
+    full_name: str
+
+    model_config = {
+        "from_attributes": True
+    }

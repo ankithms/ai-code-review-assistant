@@ -20,14 +20,35 @@ class PullRequest(Base):
     __tablename__ = "pull_requests"
 
     id = Column(Integer, primary_key=True)
+    repository_id = Column(
+        Integer,
+        ForeignKey("repositories.id"),
+    )
     github_pr_id = Column(BigInteger, unique=True)
     title = Column(String(500))
     repository = Column(String(255))
     author = Column(String(255))
 
+    repository_ref = relationship(
+        "Repository",
+        back_populates="pull_requests",
+    )
+
     reviews = relationship(
         "Review",
         back_populates="pull_request"
+    )
+
+
+class Repository(Base):
+    __tablename__ = "repositories"
+
+    id = Column(Integer, primary_key=True)
+    full_name = Column(String(255), nullable=False, unique=True, index=True)
+
+    pull_requests = relationship(
+        "PullRequest",
+        back_populates="repository_ref",
     )
 
 

@@ -5,6 +5,7 @@ from app.db.models import (
     Review,
     Issue,
 )
+from app.repositories.repository_repository import get_or_create_repository
 
 from app.schemas.output import (
     IssueStatus,
@@ -19,6 +20,7 @@ def save_review(
     review_data: ReviewResponseSchema,
     commit_sha
 ):
+    repository = get_or_create_repository(db, pr_data.repository)
     pr = (
         db.query(PullRequest)
         .filter(PullRequest.github_pr_id == pr_data.github_pr_id)
@@ -27,6 +29,7 @@ def save_review(
 
     if pr is None:
         pr = PullRequest(
+            repository_id=repository.id,
             github_pr_id=pr_data.github_pr_id,
             title=pr_data.title,
             repository=pr_data.repository,
@@ -35,6 +38,7 @@ def save_review(
         db.add(pr)
     else:
         pr.title = pr_data.title
+        pr.repository_id = repository.id
         pr.repository = pr_data.repository
         pr.author = pr_data.author
 
@@ -70,26 +74,34 @@ def save_review(
     return review
 
 
-def get_review_by_id(
-    db,
-    review_id: int
-):
+def get_review_by_id_for_repository(
+    db: Session,
+    review_id: int,
+    repository_id: int,
+) -> Review | None:
     return (
         db.query(Review)
-        .options(
-            joinedload(Review.issues)
-        )
+        .join(PullRequest)
+        .options(joinedload(Review.issues))
         .filter(
-            Review.id == review_id
+            Review.id == review_id,
+            PullRequest.repository_id == repository_id,
         )
         .first()
     )
 
 
-def get_all_reviews(
-    db
-):
-    return db.query(Review).all()
+def get_reviews_for_repository(
+    db: Session,
+    repository_id: int,
+) -> list[Review]:
+    return (
+        db.query(Review)
+        .join(PullRequest)
+        .filter(PullRequest.repository_id == repository_id)
+        .order_by(Review.id.desc())
+        .all()
+    )
 
 
 def get_latest_review_for_pull_request(
@@ -110,8 +122,21 @@ def get_latest_review_for_pull_request(
     return query.order_by(Review.id.desc()).first()
 
 
-def get_issue_by_id(db: Session, issue_id: int) -> Issue | None:
-    return db.query(Issue).filter(Issue.id == issue_id).first()
+def get_issue_by_id_for_repository(
+    db: Session,
+    issue_id: int,
+    repository_id: int,
+) -> Issue | None:
+    return (
+        db.query(Issue)
+        .join(Review)
+        .join(PullRequest)
+        .filter(
+            Issue.id == issue_id,
+            PullRequest.repository_id == repository_id,
+        )
+        .first()
+    )
 
 
 def _coerce_issue_status(status) -> IssueStatus:

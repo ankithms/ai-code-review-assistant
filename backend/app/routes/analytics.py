@@ -13,7 +13,7 @@ from app.repositories.analytics_repository import (
 from app.schemas.responses import AnalyticsResponse
 
 router = APIRouter(
-    prefix="/analytics",
+    prefix="/repositories/{repository_id}/analytics",
     tags=["analytics"]
 )
 
@@ -23,6 +23,7 @@ router = APIRouter(
     response_model=AnalyticsResponse
 )
 def analytics(
+    repository_id: int,
     db: Session = Depends(get_db)
 ):
-    return get_analytics(db)
+    return get_analytics(db, repository_id)

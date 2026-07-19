@@ -5,6 +5,7 @@ from app.routes.webhook import router as webhook_router
 from app.routes.reviews import router as reviews_router
 from app.routes.pull_requests import router as pull_request_router
 from app.routes.analytics import router as analytics_router
+from app.routes.repositories import router as repositories_router
 from fastapi.middleware.cors import CORSMiddleware
 
 # Configure logging
@@ -30,6 +31,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(webhook_router)
+app.include_router(repositories_router)
 app.include_router(reviews_router)
 app.include_router(pull_request_router)
 app.include_router(analytics_router)

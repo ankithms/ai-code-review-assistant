@@ -8,26 +8,8 @@ export default function SeverityBadge({
   const normalized =
     severity.toLowerCase();
 
-  let bg = "#22c55e";
-
-  if (normalized === "high") {
-    bg = "#ef4444";
-  }
-
-  if (normalized === "medium") {
-    bg = "#f59e0b";
-  }
-
   return (
-    <span
-      style={{
-        background: bg,
-        color: "white",
-        padding: "4px 8px",
-        borderRadius: "999px",
-        fontSize: "12px",
-      }}
-    >
+    <span className={`badge badge--${normalized}`}>
       {severity.toUpperCase()}
     </span>
   );

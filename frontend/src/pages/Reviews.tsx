@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import { Link } from "react-router-dom";
+import { useRepository } from "../context/RepositoryContext";
 
 type Review = {
   id: number;
@@ -9,14 +10,20 @@ type Review = {
 };
 
 export default function Reviews() {
+  const { selectedRepository, selectedRepositoryId, loading } = useRepository();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    api.get("/reviews").then((res) => {
+    if (selectedRepositoryId === null) {
+      setReviews([]);
+      return;
+    }
+
+    api.get(`/repositories/${selectedRepositoryId}/reviews`).then((res) => {
       setReviews(res.data);
     });
-  }, []);
+  }, [selectedRepositoryId]);
 
   const filteredReviews = reviews.filter(
     (review) =>
@@ -26,53 +33,83 @@ export default function Reviews() {
   );
 
   return (
-    <div style={{ padding: "40px" }}>
-      <h1>Reviews</h1>
-      <input
-        type="text"
-        placeholder="Search reviews..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      <table className="w-full mt-6 border-collapse">
-        <thead>
-          <tr className="border-b">
-            <th className="text-left p-3">
-              ID
-            </th>
+    <main className="page">
+      <header className="page-header">
+        <div>
+          <p className="page-kicker">Review History</p>
+          <h1 className="page-title">Reviews</h1>
+          <p className="page-description">
+            Browse completed AI reviews and open the detailed issue list for each run.
+          </p>
+          {selectedRepository && (
+            <span className="selected-repository">
+              {selectedRepository.full_name}
+            </span>
+          )}
+        </div>
+      </header>
 
-            <th className="text-left p-3">
-              PR ID
-            </th>
+      {loading && (
+        <div className="loading-state">Loading repositories...</div>
+      )}
 
-            <th className="text-left p-3">
-              Summary
-            </th>
-          </tr>
-        </thead>
+      {!loading && !selectedRepository && (
+        <div className="empty-state">No repositories are connected yet.</div>
+      )}
 
-        <tbody>
-          {filteredReviews.map((review) => (
-            <tr
-              key={review.id}
-              className="border-b"
-            >
-              <td className="p-3">
-                <Link to={`/reviews/${review.id}`}>
-                  {review.id}
-                </Link>
-              </td>
-              <td className="p-3">
-                {review.pr_id}
-              </td>
+      {!loading && selectedRepository && (
+        <>
 
-              <td className="p-3">
-                {review.summary.slice(0, 120)}...
-              </td>
+      <div className="toolbar">
+        <input
+          className="search-input"
+          type="text"
+          placeholder="Search review summaries"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+
+        <span className="muted">
+          {filteredReviews.length} of {reviews.length} reviews
+        </span>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>PR ID</th>
+              <th>Summary</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+
+          <tbody>
+            {filteredReviews.map((review) => (
+              <tr key={review.id}>
+                <td>
+                  <Link
+                    className="link-button"
+                    to={`/reviews/${review.id}`}
+                  >
+                    #{review.id}
+                  </Link>
+                </td>
+                <td>{review.pr_id}</td>
+                <td>{review.summary.slice(0, 140)}...</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {filteredReviews.length === 0 && (
+        <div className="empty-state">
+          No reviews match the current search.
+        </div>
+      )}
+        </>
+      )}
+    </main>
   );
 }
