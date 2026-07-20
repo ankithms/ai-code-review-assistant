@@ -12,6 +12,8 @@ type Issue = {
   file: string;
   comment: string;
   status: string;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
 };
 
 type Review = {
@@ -80,6 +82,17 @@ export default function ReviewDetail() {
       });
   };
 
+  const formatResolution = (issue: Issue) => {
+    if (issue.status !== "RESOLVED" || !issue.resolved_at) {
+      return null;
+    }
+
+    const resolvedAt = new Date(issue.resolved_at).toLocaleString();
+    return issue.resolved_by
+      ? `${resolvedAt} by ${issue.resolved_by}`
+      : resolvedAt;
+  };
+
   if (loading) {
     return (
       <main className="page">
@@ -133,50 +146,65 @@ export default function ReviewDetail() {
         </div>
 
         <div className="issues-list">
-          {review.issues.map((issue) => (
-            <article
-              key={issue.id}
-              className="issue-card"
-            >
-              <div className="issue-card__top">
-                <div className="issue-card__badges">
-                  <SeverityBadge severity={issue.severity} />
-                  <StatusBadge status={issue.status} />
+          {review.issues.map((issue) => {
+            const resolution = formatResolution(issue);
+
+            return (
+              <article
+                key={issue.id}
+                className={
+                  issue.status === "RESOLVED"
+                    ? "issue-card issue-card--resolved"
+                    : "issue-card"
+                }
+              >
+                <div className="issue-card__top">
+                  <div className="issue-card__badges">
+                    <SeverityBadge severity={issue.severity} />
+                    <StatusBadge status={issue.status} />
+                  </div>
+
+                  <div className="status-control">
+                    {(["OPEN", "RESOLVED", "IGNORED"] as const).map((status) => (
+                      <button
+                        key={status}
+                        type="button"
+                        onClick={() => updateIssueStatus(issue.id, status)}
+                        className={
+                          issue.status === status
+                            ? "status-button status-button--active"
+                            : "status-button"
+                        }
+                      >
+                        {status}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="status-control">
-                  {(["OPEN", "RESOLVED", "IGNORED"] as const).map((status) => (
-                    <button
-                      key={status}
-                      type="button"
-                      onClick={() => updateIssueStatus(issue.id, status)}
-                      className={
-                        issue.status === status
-                          ? "status-button status-button--active"
-                          : "status-button"
-                      }
-                    >
-                      {status}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                <div className="issue-meta">
+                  <div className="meta-item">
+                    <span className="meta-label">Category</span>
+                    <span className="meta-value">{issue.category}</span>
+                  </div>
 
-              <div className="issue-meta">
-                <div className="meta-item">
-                  <span className="meta-label">Category</span>
-                  <span className="meta-value">{issue.category}</span>
+                  <div className="meta-item">
+                    <span className="meta-label">File</span>
+                    <span className="meta-value">{issue.file}</span>
+                  </div>
+
+                  {resolution && (
+                    <div className="meta-item meta-item--resolved">
+                      <span className="meta-label">Resolved</span>
+                      <span className="meta-value">{resolution}</span>
+                    </div>
+                  )}
                 </div>
 
-                <div className="meta-item">
-                  <span className="meta-label">File</span>
-                  <span className="meta-value">{issue.file}</span>
-                </div>
-              </div>
-
-              <p className="issue-comment">{issue.comment}</p>
-            </article>
-          ))}
+                <p className="issue-comment">{issue.comment}</p>
+              </article>
+            );
+          })}
         </div>
 
         {review.issues.length === 0 && (

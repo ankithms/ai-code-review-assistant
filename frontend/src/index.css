@@ -407,6 +407,15 @@ button {
   padding: 18px;
 }
 
+.issue-card--resolved {
+  border-color: rgba(16, 185, 129, 0.28);
+  background: #f7fcfa;
+}
+
+.issue-card--resolved .issue-comment {
+  color: #5b6472;
+}
+
 .issue-card__top {
   display: flex;
   align-items: flex-start;
@@ -469,6 +478,11 @@ button {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   background: #fafbfe;
+}
+
+.meta-item--resolved {
+  border-color: rgba(16, 185, 129, 0.24);
+  background: #ecfdf5;
 }
 
 .meta-label {
