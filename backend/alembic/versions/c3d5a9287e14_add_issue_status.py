@@ -34,7 +34,6 @@ def upgrade() -> None:
         'issues',
         "status IN ('OPEN', 'RESOLVED', 'IGNORED')",
     )
-    op.alter_column('issues', 'status', server_default=None)
 
 
 def downgrade() -> None:

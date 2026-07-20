@@ -18,11 +18,17 @@ def create_review_job(
     repository: str,
     pull_request_number: int,
     commit_sha: str,
+    event_action: str | None = None,
+    base_commit_sha: str | None = None,
+    head_commit_sha: str | None = None,
 ) -> ReviewJob:
     job = ReviewJob(
         repository=repository,
         pull_request_number=pull_request_number,
         commit_sha=commit_sha,
+        event_action=event_action,
+        base_commit_sha=base_commit_sha,
+        head_commit_sha=head_commit_sha or commit_sha,
         status=PENDING,
     )
 

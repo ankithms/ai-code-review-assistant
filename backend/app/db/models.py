@@ -25,6 +25,7 @@ class PullRequest(Base):
         ForeignKey("repositories.id"),
     )
     github_pr_id = Column(BigInteger, unique=True)
+    pull_request_number = Column(Integer)
     title = Column(String(500))
     repository = Column(String(255))
     author = Column(String(255))
@@ -92,10 +93,17 @@ class Issue(Base):
     comment = Column(Text)
     line = Column(Integer)
     impact = Column(Text)
+    github_review_thread_id = Column(String(255))
+    github_comment_id = Column(BigInteger)
+    github_comment_node_id = Column(String(255))
+    github_review_id = Column(BigInteger)
+    resolved_at = Column(DateTime(timezone=True))
+    resolved_by = Column(String(255))
     status = Column(
         String(20),
         nullable=False,
         default=IssueStatus.OPEN.value,
+        server_default=IssueStatus.OPEN.value,
     )
 
     review = relationship(
@@ -111,6 +119,9 @@ class ReviewJob(Base):
     repository = Column(String(255), nullable=False)
     pull_request_number = Column(Integer, nullable=False)
     commit_sha = Column(String, nullable=False, index=True)
+    event_action = Column(String(40))
+    base_commit_sha = Column(String)
+    head_commit_sha = Column(String)
     status = Column(String(20), nullable=False, default="PENDING")
     created_at = Column(
         DateTime(timezone=True),

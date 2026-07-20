@@ -1,6 +1,8 @@
 import unittest
 from datetime import UTC, datetime, timedelta
 
+from unittest.mock import patch
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.db.models import Base, Issue, PullRequest, Repository, Review, ReviewJo
 from app.repositories.analytics_repository import get_analytics
 from app.repositories.review_repository import update_issue_status
 from app.schemas.output import IssueStatus
+from app.services.github_thread_sync_service import sync_issue_statuses_from_github
 
 
 class IssueStatusLifecycleTests(unittest.TestCase):
@@ -26,6 +29,242 @@ class IssueStatusLifecycleTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             update_issue_status(self.session, issue, "INVALID")
+
+    def test_update_issue_status_tracks_resolution_timestamps(self):
+        issue = Issue(status=IssueStatus.OPEN.value)
+        self.session.add(issue)
+        self.session.commit()
+
+        updated_issue = update_issue_status(self.session, issue, IssueStatus.RESOLVED)
+        self.assertEqual(updated_issue.status, IssueStatus.RESOLVED.value)
+        self.assertIsNotNone(updated_issue.resolved_at)
+        self.assertIsNone(updated_issue.resolved_by)
+
+        reopened_issue = update_issue_status(self.session, issue, IssueStatus.OPEN)
+        self.assertEqual(reopened_issue.status, IssueStatus.OPEN.value)
+        self.assertIsNone(reopened_issue.resolved_at)
+        self.assertIsNone(reopened_issue.resolved_by)
+
+    def test_sync_issue_statuses_from_github_updates_issue_statuses(self):
+        repository = Repository(full_name="owner/repo")
+        self.session.add(repository)
+        self.session.flush()
+
+        pull_request = PullRequest(
+            repository_id=repository.id,
+            github_pr_id=1,
+            pull_request_number=1,
+            title="PR",
+            repository=repository.full_name,
+            author="user",
+        )
+        self.session.add(pull_request)
+        self.session.flush()
+
+        review = Review(pr_id=pull_request.id, summary="Summary", commit_sha="abc")
+        self.session.add(review)
+        self.session.flush()
+
+        issue = Issue(
+            review_id=review.id,
+            severity="high",
+            category="bug",
+            file="src/app.py",
+            comment="Issue",
+            github_review_thread_id="thread-1",
+            status=IssueStatus.OPEN.value,
+        )
+        self.session.add(issue)
+        self.session.commit()
+
+        with patch(
+            "app.services.github_thread_sync_service._fetch_review_thread_states",
+            return_value={
+                "thread-1": {
+                    "is_resolved": True,
+                    "resolved_by": "octocat",
+                    "resolved_at": "2026-07-19T00:00:00Z",
+                }
+            },
+        ):
+            sync_issue_statuses_from_github(self.session, repository.id, repository.full_name, "token")
+
+        self.session.refresh(issue)
+        self.assertEqual(issue.status, IssueStatus.RESOLVED.value)
+        self.assertIsNotNone(issue.resolved_at)
+        self.assertEqual(issue.resolved_by, "octocat")
+
+    def test_sync_ignores_pull_requests_without_a_number(self):
+        repository = Repository(full_name="owner/repo")
+        self.session.add(repository)
+        self.session.flush()
+
+        pull_request_with_number = PullRequest(
+            repository_id=repository.id,
+            github_pr_id=1,
+            pull_request_number=7,
+            title="PR",
+            repository=repository.full_name,
+            author="user",
+        )
+        pull_request_without_number = PullRequest(
+            repository_id=repository.id,
+            github_pr_id=2,
+            pull_request_number=None,
+            title="PR 2",
+            repository=repository.full_name,
+            author="user",
+        )
+        self.session.add_all([pull_request_with_number, pull_request_without_number])
+        self.session.flush()
+
+        review = Review(pr_id=pull_request_with_number.id, summary="Summary", commit_sha="abc")
+        self.session.add(review)
+        self.session.flush()
+
+        issue = Issue(
+            review_id=review.id,
+            severity="high",
+            category="bug",
+            file="src/app.py",
+            comment="Issue",
+            github_review_thread_id="thread-1",
+            status=IssueStatus.OPEN.value,
+        )
+        self.session.add(issue)
+        self.session.commit()
+
+        with patch("app.services.github_thread_sync_service._fetch_review_thread_states", return_value={}) as mock_fetch:
+            sync_issue_statuses_from_github(self.session, repository.id, repository.full_name, "token")
+
+        self.assertEqual(mock_fetch.call_count, 1)
+        self.assertEqual(mock_fetch.call_args.kwargs["pull_request_number"], 7)
+
+    def test_sync_can_be_scoped_to_one_pull_request(self):
+        repository = Repository(full_name="owner/repo")
+        self.session.add(repository)
+        self.session.flush()
+
+        first_pull_request = PullRequest(
+            repository_id=repository.id,
+            github_pr_id=1,
+            pull_request_number=7,
+            title="PR",
+            repository=repository.full_name,
+            author="user",
+        )
+        second_pull_request = PullRequest(
+            repository_id=repository.id,
+            github_pr_id=2,
+            pull_request_number=8,
+            title="PR 2",
+            repository=repository.full_name,
+            author="user",
+        )
+        self.session.add_all([first_pull_request, second_pull_request])
+        self.session.flush()
+
+        first_review = Review(pr_id=first_pull_request.id, summary="Summary", commit_sha="abc")
+        second_review = Review(pr_id=second_pull_request.id, summary="Summary 2", commit_sha="def")
+        self.session.add_all([first_review, second_review])
+        self.session.flush()
+
+        first_issue = Issue(
+            review_id=first_review.id,
+            severity="high",
+            category="bug",
+            file="src/app.py",
+            comment="Issue",
+            github_review_thread_id="thread-1",
+            status=IssueStatus.OPEN.value,
+        )
+        second_issue = Issue(
+            review_id=second_review.id,
+            severity="high",
+            category="bug",
+            file="src/other.py",
+            comment="Issue 2",
+            github_review_thread_id="thread-2",
+            status=IssueStatus.OPEN.value,
+        )
+        self.session.add_all([first_issue, second_issue])
+        self.session.commit()
+
+        with patch(
+            "app.services.github_thread_sync_service._fetch_review_thread_states",
+            return_value={
+                "thread-1": {"is_resolved": True, "resolved_by": "octocat"},
+                "thread-2": {"is_resolved": True, "resolved_by": "octocat"},
+            },
+        ) as mock_fetch:
+            sync_issue_statuses_from_github(
+                self.session,
+                repository.id,
+                repository.full_name,
+                "token",
+                pull_request_id=first_pull_request.id,
+            )
+
+        self.session.refresh(first_issue)
+        self.session.refresh(second_issue)
+        self.assertEqual(mock_fetch.call_count, 1)
+        self.assertEqual(mock_fetch.call_args.kwargs["pull_request_number"], 7)
+        self.assertEqual(first_issue.status, IssueStatus.RESOLVED.value)
+        self.assertEqual(second_issue.status, IssueStatus.OPEN.value)
+
+    def test_sync_does_not_overwrite_ignored_issues(self):
+        repository = Repository(full_name="owner/repo")
+        self.session.add(repository)
+        self.session.flush()
+
+        pull_request = PullRequest(
+            repository_id=repository.id,
+            github_pr_id=1,
+            pull_request_number=1,
+            title="PR",
+            repository=repository.full_name,
+            author="user",
+        )
+        self.session.add(pull_request)
+        self.session.flush()
+
+        review = Review(pr_id=pull_request.id, summary="Summary", commit_sha="abc")
+        self.session.add(review)
+        self.session.flush()
+
+        issue = Issue(
+            review_id=review.id,
+            severity="high",
+            category="bug",
+            file="src/app.py",
+            comment="Issue",
+            github_review_thread_id="thread-1",
+            status=IssueStatus.IGNORED.value,
+        )
+        self.session.add(issue)
+        self.session.commit()
+
+        with patch(
+            "app.services.github_thread_sync_service._fetch_review_thread_states",
+            return_value={
+                "thread-1": {
+                    "is_resolved": True,
+                    "resolved_by": "octocat",
+                }
+            },
+        ):
+            sync_issue_statuses_from_github(
+                self.session,
+                repository.id,
+                repository.full_name,
+                "token",
+                pull_request_id=pull_request.id,
+            )
+
+        self.session.refresh(issue)
+        self.assertEqual(issue.status, IssueStatus.IGNORED.value)
+        self.assertIsNone(issue.resolved_at)
+        self.assertIsNone(issue.resolved_by)
 
     def test_get_analytics_includes_status_breakdown(self):
         repository = Repository(full_name="owner/repo")

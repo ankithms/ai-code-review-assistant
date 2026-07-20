@@ -23,10 +23,15 @@ You are a senior software engineer acting as a code reviewer for a GitHub Pull R
 
 Your task is to review only the code introduced or modified in the provided diff.
 
+Review scope:
+{{review_scope}}
+
 IMPORTANT RULES:
 - Review only added (+) or modified lines in the diff.
 - Do not comment on unchanged context lines.
 - Do not report issues that existed before this PR.
+- Previously reported OPEN issues are provided below as context.
+- Do not report an issue that matches the existing OPEN issue context unless the new diff introduces a genuinely new problem or materially changes the risk.
 - Use surrounding context only to understand the change.
 - Only flag issues that are likely to be real, actionable, and relevant to this change.
 - Prefer precision over recall. Avoid noisy or stylistic comments unless they create a real correctness, security, maintainability, or performance risk.
@@ -89,13 +94,30 @@ Output requirements:
 - Do not include vague suggestions like "consider improving this".
 - Be direct and evidence-based.
 
+Existing OPEN issues for this PR:
+{{existing_issues_context}}
+
 Code Diff:
 {{diff_text}}
 """
 
 
-def review_code(diff_text):
-    prompt = review_service_prompt().format(diff_text=diff_text)
+def review_code(
+    diff_text,
+    existing_issues_context: str | None = None,
+    incremental: bool = False,
+):
+    review_scope = (
+        "This is an incremental review. The diff contains only changes introduced since the previous PR head commit. "
+        "Focus exclusively on problems introduced by these latest changes."
+        if incremental
+        else "This is a full PR review. The diff contains the current pull request changes."
+    )
+    prompt = review_service_prompt().format(
+        diff_text=diff_text,
+        existing_issues_context=existing_issues_context or "None.",
+        review_scope=review_scope,
+    )
 
     try:
         response = model.invoke(prompt)

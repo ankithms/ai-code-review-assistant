@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 from app.ai.review_service import review_code
 from app.db.database import SessionLocal
-from app.db.models import Review
+from app.db.models import PullRequest, Review
 from app.github.github_service import (
+    get_review_thread_for_comment,
+    get_compare_files,
     get_pr_files,
     get_pull_request,
     post_inline_comment,
@@ -20,7 +22,12 @@ from app.repositories.review_job_repository import (
     mark_review_job_running,
     mark_review_job_success,
 )
-from app.repositories.review_repository import get_latest_review_for_pull_request, save_review
+from app.repositories.repository_repository import get_or_create_repository
+from app.repositories.review_repository import (
+    get_latest_review_for_pull_request,
+    get_open_issues_for_pull_request,
+    save_review,
+)
 from app.schemas.output import PullRequestSchema
 
 logger = logging.getLogger(__name__)
@@ -77,11 +84,7 @@ def _process_pull_request_review(db, job) -> None:
         .first()
     )
 
-    files = get_pr_files(
-        repository=job.repository,
-        pull_request_number=job.pull_request_number,
-        access_token=token,
-    )
+    files = _get_files_for_review(job, token)
 
     if existing_review:
         logger.info(
@@ -106,11 +109,53 @@ def _process_pull_request_review(db, job) -> None:
         access_token=token,
     )
 
+    pr_schema = PullRequestSchema(
+        github_pr_id=pull_request["id"],
+        pull_request_number=job.pull_request_number,
+        title=pull_request["title"],
+        repository=job.repository,
+        author=pull_request["user"]["login"],
+    )
+    pull_request_record = _ensure_pull_request_record(
+        db=db,
+        repository_full_name=pr_schema.repository,
+        pull_request_number=pr_schema.pull_request_number,
+        github_pr_id=pr_schema.github_pr_id,
+        title=pr_schema.title,
+        author=pr_schema.author,
+    )
+    open_issues = get_open_issues_for_pull_request(
+        db=db,
+        repository_id=pull_request_record.repository_id,
+        github_pr_id=pr_schema.github_pr_id,
+        pull_request_number=job.pull_request_number,
+    )
+
     full_diff = _build_diff(files)
+    if not full_diff.strip():
+        logger.info(
+            "Skipping AI review for job %s because there are no reviewable changed files",
+            job.id,
+        )
+        save_review(
+            db=db,
+            pr_data=pr_schema,
+            review_data=SimpleNamespace(
+                summary="No reviewable changed files were found.",
+                issues=[],
+            ),
+            commit_sha=job.commit_sha,
+        )
+        return
+
     logger.info("Calling AI review service for job %s", job.id)
 
     try:
-        ai_review = review_code(full_diff)
+        ai_review = review_code(
+            full_diff,
+            existing_issues_context=_format_existing_issue_context(open_issues),
+            incremental=_is_incremental_review_job(job),
+        )
     except Exception as exc:
         logger.exception("AI review failed for job %s", job.id)
         _post_ai_failure_comment(
@@ -127,21 +172,19 @@ def _process_pull_request_review(db, job) -> None:
         len(ai_review.issues),
     )
 
-    pr_schema = PullRequestSchema(
-        github_pr_id=pull_request["id"],
-        title=pull_request["title"],
-        repository=job.repository,
-        author=pull_request["user"]["login"],
-    )
-
     previous_review = get_latest_review_for_pull_request(
         db=db,
         github_pr_id=pull_request["id"],
+        repository_id=None,
+        pull_request_number=job.pull_request_number,
         exclude_commit_sha=job.commit_sha,
     )
     issues_to_post = _filter_duplicate_issues(
         new_issues=ai_review.issues,
-        previous_issues=previous_review.issues if previous_review else [],
+        previous_issues=_combine_previous_issue_context(
+            previous_review.issues if previous_review else [],
+            open_issues,
+        ),
     )
     if len(issues_to_post) != len(ai_review.issues):
         logger.info(
@@ -149,6 +192,19 @@ def _process_pull_request_review(db, job) -> None:
             len(ai_review.issues) - len(issues_to_post),
             job.pull_request_number,
         )
+
+    if not issues_to_post:
+        logger.info(
+            "Skipping GitHub comment posting for PR #%s because all issues were already present in a previous review",
+            job.pull_request_number,
+        )
+        save_review(
+            db=db,
+            pr_data=pr_schema,
+            review_data=_review_with_issues(ai_review, []),
+            commit_sha=job.commit_sha,
+        )
+        return
 
     _post_github_comments(
         review=_review_with_issues(ai_review, issues_to_post),
@@ -163,7 +219,7 @@ def _process_pull_request_review(db, job) -> None:
     save_review(
         db=db,
         pr_data=pr_schema,
-        review_data=ai_review,
+        review_data=_review_with_issues(ai_review, issues_to_post),
         commit_sha=job.commit_sha,
     )
 
@@ -181,6 +237,96 @@ def _build_diff(files: list[dict]) -> str:
     return full_diff
 
 
+def _get_files_for_review(job, access_token: str) -> list[dict]:
+    if _is_incremental_review_job(job):
+        logger.info(
+            "Fetching incremental diff for PR #%s between %s and %s",
+            job.pull_request_number,
+            job.base_commit_sha,
+            job.head_commit_sha or job.commit_sha,
+        )
+        files = get_compare_files(
+            repository=job.repository,
+            base_commit_sha=job.base_commit_sha,
+            head_commit_sha=job.head_commit_sha or job.commit_sha,
+            access_token=access_token,
+        )
+    else:
+        logger.info(
+            "Fetching full PR diff for %s PR #%s action=%s",
+            job.repository,
+            job.pull_request_number,
+            getattr(job, "event_action", None) or "unknown",
+        )
+        files = get_pr_files(
+            repository=job.repository,
+            pull_request_number=job.pull_request_number,
+            access_token=access_token,
+        )
+
+    return _filter_reviewable_files(files)
+
+
+def _is_incremental_review_job(job) -> bool:
+    return (
+        getattr(job, "event_action", None) == "synchronize"
+        and bool(getattr(job, "base_commit_sha", None))
+        and bool(getattr(job, "head_commit_sha", None) or getattr(job, "commit_sha", None))
+    )
+
+
+def _filter_reviewable_files(files: list[dict]) -> list[dict]:
+    reviewable_files = []
+
+    for file in files:
+        if file.get("status") == "removed":
+            continue
+
+        if not file.get("patch"):
+            continue
+
+        reviewable_files.append(file)
+
+    return reviewable_files
+
+
+def _format_existing_issue_context(issues) -> str:
+    if not issues:
+        return "None."
+
+    lines = []
+    for issue in issues:
+        category = _enum_value(getattr(issue, "category", ""))
+        severity = _enum_value(getattr(issue, "severity", ""))
+        file_path = getattr(issue, "file", None) or "unknown file"
+        line_number = getattr(issue, "line", None)
+        location = f"{file_path}:{line_number}" if line_number else file_path
+        problem, _, impact, _ = _split_issue_comment_sections(getattr(issue, "comment", ""))
+        impact = getattr(issue, "impact", None) or impact
+        context = f"- {location} [{severity}/{category}] {problem}"
+        if impact:
+            context += f" Impact: {impact}"
+        lines.append(context)
+
+    return "\n".join(lines)
+
+
+def _combine_previous_issue_context(previous_issues, open_issues):
+    combined_issues = []
+    seen_issue_ids = set()
+
+    for issue in [*previous_issues, *open_issues]:
+        issue_id = getattr(issue, "id", None)
+        if issue_id is not None:
+            if issue_id in seen_issue_ids:
+                continue
+            seen_issue_ids.add(issue_id)
+
+        combined_issues.append(issue)
+
+    return combined_issues
+
+
 def _review_with_issues(review, issues):
     if hasattr(review, "model_copy"):
         return review.model_copy(update={"issues": issues})
@@ -189,6 +335,35 @@ def _review_with_issues(review, issues):
         summary=getattr(review, "summary", ""),
         issues=issues,
     )
+
+
+def _ensure_pull_request_record(
+    db,
+    repository_full_name: str,
+    pull_request_number: int,
+    github_pr_id: int,
+    title: str,
+    author: str,
+) -> PullRequest:
+    repository = get_or_create_repository(db, repository_full_name)
+    pull_request = (
+        db.query(PullRequest)
+        .filter(PullRequest.github_pr_id == github_pr_id)
+        .one_or_none()
+    )
+
+    if pull_request is None:
+        pull_request = PullRequest(github_pr_id=github_pr_id)
+        db.add(pull_request)
+
+    pull_request.repository_id = repository.id
+    pull_request.pull_request_number = pull_request_number
+    pull_request.title = title
+    pull_request.repository = repository_full_name
+    pull_request.author = author
+    db.flush()
+
+    return pull_request
 
 
 def _filter_duplicate_issues(
@@ -571,7 +746,14 @@ def _post_github_comments(
             {k: v for k, v in comment_payload.items() if k not in {'access_token', 'body'}},
         )
         try:
-            post_inline_comment(**comment_payload)
+            response = post_inline_comment(**comment_payload)
+            _attach_github_inline_metadata(
+                issue=issue,
+                response=response,
+                repository=repository,
+                pull_request_number=pull_request_number,
+                access_token=access_token,
+            )
             logger.info(
                 "Posted inline comment for %s:%s anchor=%s",
                 issue.file,
@@ -595,7 +777,14 @@ def _post_github_comments(
                     fallback_payload.pop(key, None)
 
                 try:
-                    post_inline_comment(**fallback_payload)
+                    response = post_inline_comment(**fallback_payload)
+                    _attach_github_inline_metadata(
+                        issue=issue,
+                        response=response,
+                        repository=repository,
+                        pull_request_number=pull_request_number,
+                        access_token=access_token,
+                    )
                     logger.info(
                         "Posted inline comment for %s:%s using fallback position=%s",
                         issue.file,
@@ -639,6 +828,58 @@ def _post_github_comments(
         skipped_inline_comments,
         failed_inline_comments,
     )
+
+
+def _attach_github_inline_metadata(
+    issue,
+    response,
+    repository: str,
+    pull_request_number: int,
+    access_token: str,
+) -> None:
+    if not isinstance(response, dict):
+        return
+
+    comment_id = response.get("id")
+    issue.github_comment_id = comment_id
+    issue.github_comment_node_id = response.get("node_id")
+    issue.github_review_id = response.get("pull_request_review_id")
+
+    thread_id = (
+        (response.get("pull_request_review_thread") or {}).get("id")
+        or response.get("pull_request_review_thread_id")
+    )
+    if thread_id:
+        issue.github_review_thread_id = str(thread_id)
+        return
+
+    if not comment_id or not response.get("pull_request_review_id"):
+        return
+
+    try:
+        thread = get_review_thread_for_comment(
+            repository=repository,
+            pull_request_number=pull_request_number,
+            access_token=access_token,
+            comment_id=comment_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Posted inline comment %s but could not resolve its GitHub review thread: %s",
+            comment_id,
+            exc,
+        )
+        return
+
+    if not thread:
+        logger.warning(
+            "Posted inline comment %s but no matching GitHub review thread was found",
+            comment_id,
+        )
+        return
+
+    issue.github_review_thread_id = thread.get("id")
+    issue.github_comment_node_id = thread.get("comment_node_id") or issue.github_comment_node_id
 
 
 def _enum_value(value) -> str:

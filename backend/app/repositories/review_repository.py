@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
@@ -31,6 +33,7 @@ def save_review(
         pr = PullRequest(
             repository_id=repository.id,
             github_pr_id=pr_data.github_pr_id,
+            pull_request_number=pr_data.pull_request_number,
             title=pr_data.title,
             repository=pr_data.repository,
             author=pr_data.author,
@@ -39,6 +42,7 @@ def save_review(
     else:
         pr.title = pr_data.title
         pr.repository_id = repository.id
+        pr.pull_request_number = pr_data.pull_request_number
         pr.repository = pr_data.repository
         pr.author = pr_data.author
 
@@ -63,6 +67,10 @@ def save_review(
             line=issue_data.line,
             comment=issue_data.comment,
             impact=issue_data.impact,
+            github_review_thread_id=issue_data.github_review_thread_id,
+            github_comment_id=issue_data.github_comment_id,
+            github_comment_node_id=issue_data.github_comment_node_id,
+            github_review_id=issue_data.github_review_id,
             status=IssueStatus.OPEN.value,
         )
 
@@ -106,20 +114,55 @@ def get_reviews_for_repository(
 
 def get_latest_review_for_pull_request(
     db: Session,
-    github_pr_id: int,
+    github_pr_id: int | None = None,
+    repository_id: int | None = None,
+    pull_request_number: int | None = None,
     exclude_commit_sha: str | None = None,
 ) -> Review | None:
     query = (
         db.query(Review)
         .join(PullRequest)
         .options(joinedload(Review.issues))
-        .filter(PullRequest.github_pr_id == github_pr_id)
     )
+
+    if github_pr_id is not None:
+        query = query.filter(PullRequest.github_pr_id == github_pr_id)
+
+    if repository_id is not None:
+        query = query.filter(PullRequest.repository_id == repository_id)
+
+    if pull_request_number is not None:
+        query = query.filter(PullRequest.pull_request_number == pull_request_number)
 
     if exclude_commit_sha is not None:
         query = query.filter(Review.commit_sha != exclude_commit_sha)
 
     return query.order_by(Review.id.desc()).first()
+
+
+def get_open_issues_for_pull_request(
+    db: Session,
+    repository_id: int | None = None,
+    github_pr_id: int | None = None,
+    pull_request_number: int | None = None,
+) -> list[Issue]:
+    query = (
+        db.query(Issue)
+        .join(Review)
+        .join(PullRequest)
+        .filter(Issue.status == IssueStatus.OPEN.value)
+    )
+
+    if repository_id is not None:
+        query = query.filter(PullRequest.repository_id == repository_id)
+
+    if github_pr_id is not None:
+        query = query.filter(PullRequest.github_pr_id == github_pr_id)
+
+    if pull_request_number is not None:
+        query = query.filter(PullRequest.pull_request_number == pull_request_number)
+
+    return query.order_by(Issue.id.asc()).all()
 
 
 def get_issue_by_id_for_repository(
@@ -160,6 +203,13 @@ def update_issue_status(
 ) -> Issue:
     resolved_status = _coerce_issue_status(status)
     issue.status = resolved_status.value
+
+    if resolved_status == IssueStatus.RESOLVED:
+        if issue.resolved_at is None:
+            issue.resolved_at = datetime.now(UTC)
+    else:
+        issue.resolved_at = None
+        issue.resolved_by = None
 
     db.commit()
     db.refresh(issue)

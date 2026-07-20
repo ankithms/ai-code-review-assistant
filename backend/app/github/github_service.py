@@ -11,6 +11,14 @@ def _headers(access_token):
     }
 
 
+def _split_repository(repository):
+    parts = repository.split("/", 1)
+    if len(parts) != 2:
+        return None, None
+
+    return parts[0], parts[1]
+
+
 def get_pull_request(
     repository,
     pull_request_number,
@@ -40,6 +48,22 @@ def get_pr_files(
     response.raise_for_status()
 
     return response.json()
+
+
+def get_compare_files(
+    repository,
+    base_commit_sha,
+    head_commit_sha,
+    access_token,
+):
+    response = requests.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/compare/{base_commit_sha}...{head_commit_sha}",
+        headers=_headers(access_token),
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json().get("files", [])
 
 
 def post_pr_comment(
@@ -107,3 +131,90 @@ def post_inline_comment(
         ) from exc
 
     return response.json()
+
+
+def get_review_thread_for_comment(
+    repository,
+    pull_request_number,
+    access_token,
+    comment_id,
+):
+    owner, repo = _split_repository(repository)
+    if not owner or not repo or not comment_id:
+        return None
+
+    after = None
+    while True:
+        payload = {
+            "query": """
+            query($owner: String!, $repo: String!, $prNumber: Int!, $after: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $prNumber) {
+                  reviewThreads(first: 100, after: $after) {
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
+                    nodes {
+                      id
+                      comments(first: 100) {
+                        nodes {
+                          databaseId
+                          id
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            "variables": {
+                "owner": owner,
+                "repo": repo,
+                "prNumber": pull_request_number,
+                "after": after,
+            },
+        }
+
+        response = requests.post(
+            f"{GITHUB_API_BASE_URL}/graphql",
+            headers={
+                **_headers(access_token),
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get("errors"):
+            raise RuntimeError(f"GitHub review thread lookup failed: {data['errors']}")
+
+        payload_data = data.get("data") if isinstance(data, dict) else None
+        repository_data = payload_data.get("repository") if isinstance(payload_data, dict) else None
+        pull_request_data = repository_data.get("pullRequest") if isinstance(repository_data, dict) else None
+        review_threads = pull_request_data.get("reviewThreads") if isinstance(pull_request_data, dict) else None
+        if not isinstance(review_threads, dict):
+            return None
+
+        nodes = review_threads.get("nodes") or []
+        for thread in nodes:
+            if not isinstance(thread, dict):
+                continue
+            comments = thread.get("comments", {}).get("nodes") or []
+            for comment in comments:
+                if not isinstance(comment, dict):
+                    continue
+                if comment.get("databaseId") == comment_id:
+                    return {
+                        "id": thread.get("id"),
+                        "comment_node_id": comment.get("id"),
+                    }
+
+        page_info = review_threads.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            return None
+
+        after = page_info.get("endCursor")

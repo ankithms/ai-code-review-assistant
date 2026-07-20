@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 from app.schemas.output import IssueStatus
@@ -10,6 +12,8 @@ class IssueResponse(BaseModel):
     file: str | None = None
     comment: str
     status: IssueStatus
+    resolved_at: datetime | None = None
+    resolved_by: str | None = None
 
     model_config = {
         "from_attributes": True

@@ -30,6 +30,10 @@ class IssueSchema(BaseModel):
     line: int | None = None
     comment: str
     impact: str | None = None
+    github_review_thread_id: str | None = None
+    github_comment_id: int | None = None
+    github_comment_node_id: str | None = None
+    github_review_id: int | None = None
 
 
 class ReviewResponseSchema(BaseModel):
@@ -39,6 +43,7 @@ class ReviewResponseSchema(BaseModel):
 
 class PullRequestSchema(BaseModel):
     github_pr_id: int
+    pull_request_number: int
     title: str
     repository: str
     author: str

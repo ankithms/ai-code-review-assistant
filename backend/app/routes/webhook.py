@@ -42,7 +42,7 @@ async def github_webhook(
 
     action = payload.get("action")
 
-    if action not in ["opened", "synchronize"]:
+    if action not in ["opened", "reopened", "synchronize"]:
         return {
             "status": "ignored",
             "action": action,
@@ -59,11 +59,19 @@ async def github_webhook(
     repository_full_name = repository.get("full_name")
     pull_request_number = pull_request.get("number")
     commit_sha = (pull_request.get("head") or {}).get("sha")
+    base_commit_sha = payload.get("before") if action == "synchronize" else None
+    head_commit_sha = payload.get("after") or commit_sha
 
     if not repository_full_name or not pull_request_number or not commit_sha:
         raise HTTPException(
             status_code=400,
             detail="Webhook payload is missing repository, pull request number, or commit sha",
+        )
+
+    if action == "synchronize" and not base_commit_sha:
+        raise HTTPException(
+            status_code=400,
+            detail="Webhook payload is missing previous head commit sha for synchronize review",
         )
 
     active_job = get_active_review_job_by_commit(db, commit_sha)
@@ -107,6 +115,9 @@ async def github_webhook(
         repository=repository_full_name,
         pull_request_number=pull_request_number,
         commit_sha=commit_sha,
+        event_action=action,
+        base_commit_sha=base_commit_sha,
+        head_commit_sha=head_commit_sha,
     )
 
     try:

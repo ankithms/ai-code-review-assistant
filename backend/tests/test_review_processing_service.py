@@ -3,8 +3,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
+from app.db.models import Base, PullRequest, Repository
 from app.schemas.output import CategoryEnum, SeverityEnum
 from app.services import review_processing_service
 
@@ -53,6 +57,103 @@ class GithubCommentPostingTests(unittest.TestCase):
 
         post_pr_comment.assert_called_once()
 
+    def test_persists_github_thread_metadata_after_inline_comment_posts(self):
+        issue = SimpleNamespace(
+            file="src/app.py",
+            line=2,
+            severity=SeverityEnum.high,
+            category=CategoryEnum.bug,
+            comment="This line can fail.",
+        )
+        review = SimpleNamespace(
+            issues=[issue],
+            summary="Review summary",
+        )
+        files = [
+            {
+                "filename": "src/app.py",
+                "patch": "@@ -1,2 +1,2 @@\n unchanged\n+new line",
+            }
+        ]
+
+        with (
+            patch.object(
+                review_processing_service,
+                "post_inline_comment",
+                return_value={
+                    "id": 123,
+                    "node_id": "comment-node",
+                    "pull_request_review_id": 456,
+                },
+            ),
+            patch.object(
+                review_processing_service,
+                "get_review_thread_for_comment",
+                return_value={
+                    "id": "thread-node",
+                    "comment_node_id": "graphql-comment-node",
+                },
+            ) as get_review_thread_for_comment,
+            patch.object(review_processing_service, "post_pr_comment"),
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=1,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="abc123",
+                access_token="token",
+            )
+
+        get_review_thread_for_comment.assert_called_once_with(
+            repository="owner/repo",
+            pull_request_number=12,
+            access_token="token",
+            comment_id=123,
+        )
+        self.assertEqual(issue.github_comment_id, 123)
+        self.assertEqual(issue.github_comment_node_id, "graphql-comment-node")
+        self.assertEqual(issue.github_review_id, 456)
+        self.assertEqual(issue.github_review_thread_id, "thread-node")
+
+    def test_ensure_pull_request_record_backfills_missing_pull_request_number(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        session = Session(engine)
+
+        try:
+            repository = Repository(full_name="owner/repo")
+            session.add(repository)
+            session.flush()
+
+            existing_pr = PullRequest(
+                repository_id=repository.id,
+                github_pr_id=99,
+                pull_request_number=None,
+                title="Old title",
+                repository=repository.full_name,
+                author="octocat",
+            )
+            session.add(existing_pr)
+            session.commit()
+
+            review_processing_service._ensure_pull_request_record(
+                db=session,
+                repository_full_name="owner/repo",
+                pull_request_number=42,
+                github_pr_id=99,
+                title="Updated title",
+                author="hubot",
+            )
+
+            session.refresh(existing_pr)
+            self.assertEqual(existing_pr.pull_request_number, 42)
+            self.assertEqual(existing_pr.title, "Updated title")
+            self.assertEqual(existing_pr.author, "hubot")
+        finally:
+            session.close()
+
     def test_existing_saved_review_is_reposted_without_running_ai(self):
         saved_review = SimpleNamespace(id=7, commit_sha="abc123", issues=[], summary="Saved summary")
         job = SimpleNamespace(
@@ -94,6 +195,254 @@ class GithubCommentPostingTests(unittest.TestCase):
         get_pull_request.assert_not_called()
         review_code.assert_not_called()
         save_review.assert_not_called()
+
+    def test_duplicate_only_review_is_saved_without_posting_github_comments(self):
+        issue = SimpleNamespace(
+            file="calculator.py",
+            line=2,
+            severity=SeverityEnum.high,
+            category=CategoryEnum.bug,
+            comment="Dereferencing a nullable user may raise an AttributeError.",
+            impact="The request can crash when the user lookup returns None.",
+        )
+        ai_review = SimpleNamespace(
+            summary="Review summary",
+            issues=[issue],
+        )
+        previous_review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file="calculator.py",
+                    line=2,
+                    category=CategoryEnum.bug,
+                    comment="Dereferencing a nullable user may raise an AttributeError.",
+                    impact="The request can crash when the user lookup returns None.",
+                )
+            ],
+        )
+        job = SimpleNamespace(
+            id=3,
+            repository="owner/repo",
+            pull_request_number=12,
+            commit_sha="def456",
+        )
+
+        class Query:
+            def filter(self, *args):
+                return self
+
+            def first(self):
+                return None
+
+        db = SimpleNamespace(query=lambda model: Query())
+        files = [{"filename": "calculator.py", "patch": "@@ -1,2 +1,2 @@\n user = None\n print(user.name)"}]
+        pull_request = {
+            "id": 99,
+            "title": "PR title",
+            "user": {"login": "octocat"},
+        }
+
+        with (
+            patch.dict(os.environ, {"GITHUB_ACCESS_TOKEN": "token"}),
+            patch.object(review_processing_service, "get_pr_files", return_value=files),
+            patch.object(review_processing_service, "get_pull_request", return_value=pull_request),
+            patch.object(review_processing_service, "review_code", return_value=ai_review),
+            patch.object(
+                review_processing_service,
+                "get_latest_review_for_pull_request",
+                return_value=previous_review,
+            ),
+            patch.object(
+                review_processing_service,
+                "get_open_issues_for_pull_request",
+                return_value=[],
+            ),
+            patch.object(review_processing_service, "_ensure_pull_request_record") as ensure_pr,
+            patch.object(review_processing_service, "_post_github_comments") as post_github_comments,
+            patch.object(review_processing_service, "save_review") as save_review,
+        ):
+            review_processing_service._process_pull_request_review(db, job)
+
+        ensure_pr.assert_called_once()
+        post_github_comments.assert_not_called()
+        save_review.assert_called_once()
+        self.assertEqual(save_review.call_args.kwargs["review_data"].issues, [])
+        self.assertEqual(save_review.call_args.kwargs["commit_sha"], "def456")
+        self.assertEqual(save_review.call_args.kwargs["pr_data"].pull_request_number, 12)
+
+    def test_synchronize_review_uses_compare_diff_and_open_issue_context(self):
+        new_issue = SimpleNamespace(
+            file="src/app.py",
+            line=4,
+            severity=SeverityEnum.high,
+            category=CategoryEnum.security,
+            comment="Interpolating user input into SQL can allow injection.",
+            impact="An attacker can alter the query.",
+        )
+        ai_review = SimpleNamespace(
+            summary="Review summary",
+            issues=[new_issue],
+        )
+        open_issue = SimpleNamespace(
+            id=1,
+            file="src/app.py",
+            line=2,
+            severity="medium",
+            category="bug",
+            comment="Dereferencing a nullable user may raise an AttributeError.",
+            impact="The request can crash.",
+        )
+        job = SimpleNamespace(
+            id=3,
+            repository="owner/repo",
+            pull_request_number=12,
+            commit_sha="newsha",
+            event_action="synchronize",
+            base_commit_sha="oldsha",
+            head_commit_sha="newsha",
+        )
+
+        class Query:
+            def filter(self, *args):
+                return self
+
+            def first(self):
+                return None
+
+        db = SimpleNamespace(query=lambda model: Query())
+        compare_files = [
+            {
+                "filename": "src/app.py",
+                "status": "modified",
+                "patch": "@@ -1,3 +1,4 @@\n user = None\n print(user.name)\n+query = f\"SELECT {user_id}\"",
+            },
+            {
+                "filename": "src/old.py",
+                "status": "removed",
+                "patch": "@@ -1 +0,0 @@\n-old = True",
+            },
+            {
+                "filename": "assets/logo.png",
+                "status": "modified",
+            },
+        ]
+        pull_request = {
+            "id": 99,
+            "title": "PR title",
+            "user": {"login": "octocat"},
+        }
+
+        with (
+            patch.dict(os.environ, {"GITHUB_ACCESS_TOKEN": "token"}),
+            patch.object(review_processing_service, "get_compare_files", return_value=compare_files) as get_compare_files,
+            patch.object(review_processing_service, "get_pr_files") as get_pr_files,
+            patch.object(review_processing_service, "get_pull_request", return_value=pull_request),
+            patch.object(review_processing_service, "_ensure_pull_request_record", return_value=SimpleNamespace(repository_id=5)),
+            patch.object(review_processing_service, "get_open_issues_for_pull_request", return_value=[open_issue]),
+            patch.object(review_processing_service, "get_latest_review_for_pull_request", return_value=None),
+            patch.object(review_processing_service, "review_code", return_value=ai_review) as review_code,
+            patch.object(review_processing_service, "_post_github_comments") as post_github_comments,
+            patch.object(review_processing_service, "save_review") as save_review,
+        ):
+            review_processing_service._process_pull_request_review(db, job)
+
+        get_compare_files.assert_called_once_with(
+            repository="owner/repo",
+            base_commit_sha="oldsha",
+            head_commit_sha="newsha",
+            access_token="token",
+        )
+        get_pr_files.assert_not_called()
+        review_code.assert_called_once()
+        self.assertTrue(review_code.call_args.kwargs["incremental"])
+        self.assertIn("src/app.py:2", review_code.call_args.kwargs["existing_issues_context"])
+        self.assertIn("Dereferencing a nullable user", review_code.call_args.kwargs["existing_issues_context"])
+        self.assertIn("query = f", review_code.call_args.args[0])
+        self.assertNotIn("src/old.py", review_code.call_args.args[0])
+        self.assertNotIn("assets/logo.png", review_code.call_args.args[0])
+        post_github_comments.assert_called_once()
+        self.assertEqual(save_review.call_args.kwargs["review_data"].issues, [new_issue])
+
+    def test_opened_review_uses_full_pr_diff(self):
+        job = SimpleNamespace(
+            id=3,
+            repository="owner/repo",
+            pull_request_number=12,
+            commit_sha="newsha",
+            event_action="opened",
+            base_commit_sha=None,
+            head_commit_sha="newsha",
+        )
+        files = [
+            {
+                "filename": "src/app.py",
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n+value = 1",
+            }
+        ]
+
+        with (
+            patch.object(review_processing_service, "get_pr_files", return_value=files) as get_pr_files,
+            patch.object(review_processing_service, "get_compare_files") as get_compare_files,
+        ):
+            reviewable_files = review_processing_service._get_files_for_review(job, "token")
+
+        get_pr_files.assert_called_once_with(
+            repository="owner/repo",
+            pull_request_number=12,
+            access_token="token",
+        )
+        get_compare_files.assert_not_called()
+        self.assertEqual(reviewable_files, files)
+
+    def test_synchronize_review_with_no_reviewable_files_saves_empty_review(self):
+        job = SimpleNamespace(
+            id=3,
+            repository="owner/repo",
+            pull_request_number=12,
+            commit_sha="newsha",
+            event_action="synchronize",
+            base_commit_sha="oldsha",
+            head_commit_sha="newsha",
+        )
+
+        class Query:
+            def filter(self, *args):
+                return self
+
+            def first(self):
+                return None
+
+        db = SimpleNamespace(query=lambda model: Query())
+        pull_request = {
+            "id": 99,
+            "title": "PR title",
+            "user": {"login": "octocat"},
+        }
+
+        with (
+            patch.dict(os.environ, {"GITHUB_ACCESS_TOKEN": "token"}),
+            patch.object(
+                review_processing_service,
+                "get_compare_files",
+                return_value=[
+                    {"filename": "src/old.py", "status": "removed", "patch": "@@ -1 +0,0 @@\n-old = True"},
+                    {"filename": "assets/logo.png", "status": "modified"},
+                ],
+            ),
+            patch.object(review_processing_service, "get_pull_request", return_value=pull_request),
+            patch.object(review_processing_service, "_ensure_pull_request_record", return_value=SimpleNamespace(repository_id=5)),
+            patch.object(review_processing_service, "get_open_issues_for_pull_request", return_value=[]),
+            patch.object(review_processing_service, "review_code") as review_code,
+            patch.object(review_processing_service, "_post_github_comments") as post_github_comments,
+            patch.object(review_processing_service, "save_review") as save_review,
+        ):
+            review_processing_service._process_pull_request_review(db, job)
+
+        review_code.assert_not_called()
+        post_github_comments.assert_not_called()
+        save_review.assert_called_once()
+        self.assertEqual(save_review.call_args.kwargs["review_data"].issues, [])
 
     def test_posts_saved_db_issue_with_string_severity_and_category(self):
         review = SimpleNamespace(
