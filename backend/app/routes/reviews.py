@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.get(
-    "/",
+    "",
     response_model=list[ReviewListResponse]
 )
 def get_reviews(

@@ -23,7 +23,7 @@ router = APIRouter(
 
 
 @router.get(
-    "/",
+    "",
     response_model=AnalyticsResponse
 )
 def analytics(
