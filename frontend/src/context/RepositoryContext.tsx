@@ -1,28 +1,11 @@
 import {
-  createContext,
-  useContext,
   useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
 import { api } from "../services/api";
-
-export type Repository = {
-  id: number;
-  full_name: string;
-};
-
-type RepositoryContextValue = {
-  repositories: Repository[];
-  selectedRepository: Repository | null;
-  selectedRepositoryId: number | null;
-  setSelectedRepositoryId: (repositoryId: number) => void;
-  loading: boolean;
-};
-
-const RepositoryContext =
-  createContext<RepositoryContextValue | null>(null);
+import { RepositoryContext, type Repository } from "./repository-context";
 
 const STORAGE_KEY = "selectedRepositoryId";
 
@@ -92,14 +75,4 @@ export function RepositoryProvider({
       {children}
     </RepositoryContext.Provider>
   );
-}
-
-export function useRepository() {
-  const context = useContext(RepositoryContext);
-
-  if (context === null) {
-    throw new Error("useRepository must be used inside RepositoryProvider");
-  }
-
-  return context;
 }

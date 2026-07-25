@@ -41,15 +41,38 @@ def get_pr_files(
     pull_request_number,
     access_token,
 ):
-
-    response = requests.get(
+    return _get_all_pages(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/pulls/{pull_request_number}/files",
-        headers=_headers(access_token),
-        timeout=TIMEOUT_SECONDS,
+        access_token=access_token,
     )
-    response.raise_for_status()
 
-    return response.json()
+
+def _get_all_pages(url, access_token, params=None):
+    items = []
+    next_url = url
+    next_params = {
+        **(params or {}),
+        "per_page": 100,
+    }
+
+    while next_url:
+        response = requests.get(
+            next_url,
+            headers=_headers(access_token),
+            params=next_params,
+            timeout=TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise RuntimeError("Expected a list response from GitHub paginated endpoint")
+
+        items.extend(payload)
+        next_url = response.links.get("next", {}).get("url")
+        next_params = None
+
+    return items
 
 
 def get_compare_files(

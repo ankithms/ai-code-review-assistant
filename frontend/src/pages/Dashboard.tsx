@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import StatCard from "../components/StatCard";
-import { useRepository } from "../context/RepositoryContext";
+import { useRepository } from "../context/useRepository";
 
 type Analytics = {
   total_ai_reviews: number;
@@ -72,22 +72,34 @@ function Breakdown({
 
 export default function Dashboard() {
   const { selectedRepository, selectedRepositoryId, loading } = useRepository();
-  const [analytics, setAnalytics] =
-    useState<Analytics | null>(null);
+  const [analyticsState, setAnalyticsState] =
+    useState<{ repositoryId: number; data: Analytics } | null>(null);
 
   useEffect(() => {
     if (selectedRepositoryId === null) {
-      setAnalytics(null);
       return;
     }
 
+    let ignore = false;
+
     api.get(`/repositories/${selectedRepositoryId}/analytics`)
       .then((res) => {
-        setAnalytics(res.data);
+        if (!ignore) {
+          setAnalyticsState({
+            repositoryId: selectedRepositoryId,
+            data: res.data,
+          });
+        }
       })
       .catch((err) => {
-        console.error(err);
+        if (!ignore) {
+          console.error(err);
+        }
       });
+
+    return () => {
+      ignore = true;
+    };
   }, [selectedRepositoryId]);
 
   if (loading) {
@@ -106,7 +118,10 @@ export default function Dashboard() {
     );
   }
 
-  if (!analytics) {
+  if (
+    !analyticsState
+    || analyticsState.repositoryId !== selectedRepositoryId
+  ) {
     return (
       <main className="page">
         <div className="loading-state">Loading analytics...</div>
@@ -114,6 +129,7 @@ export default function Dashboard() {
     );
   }
 
+  const analytics = analyticsState.data;
   const reviewTime =
     analytics.average_review_processing_time_seconds === null
       ? "N/A"

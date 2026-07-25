@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../services/api";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusBadge from "../components/StatusBadge";
-import { useRepository } from "../context/RepositoryContext";
+import { useRepository } from "../context/useRepository";
 
 type Issue = {
   id: number;
@@ -76,36 +76,70 @@ export default function ReviewDetail() {
   const { id } = useParams();
   const { selectedRepository, selectedRepositoryId, loading } = useRepository();
 
-  const [review, setReview] =
-    useState<Review | null>(null);
+  const [reviewState, setReviewState] =
+    useState<{
+      repositoryId: number;
+      reviewId: string;
+      data: Review;
+    } | null>(null);
   const [selectedIssueIds, setSelectedIssueIds] = useState<number[]>([]);
   const [fixPreview, setFixPreview] = useState<FixPreview | null>(null);
   const [fixMessage, setFixMessage] = useState<string | null>(null);
   const [fixPullRequestUrl, setFixPullRequestUrl] = useState<string | null>(null);
   const [fixLoading, setFixLoading] = useState(false);
 
-  const loadReview = () => {
-    if (selectedRepositoryId === null) {
-      setReview(null);
+  const applyLoadedReview = useCallback((
+    nextReview: Review,
+    repositoryId: number,
+    reviewId: string,
+  ) => {
+    setReviewState({
+      repositoryId,
+      reviewId,
+      data: nextReview,
+    });
+    setSelectedIssueIds([]);
+    setFixPreview(null);
+    setFixPullRequestUrl(null);
+  }, []);
+
+  const loadReview = useCallback(() => {
+    if (selectedRepositoryId === null || !id) {
       return;
     }
 
     api.get(`/repositories/${selectedRepositoryId}/reviews/${id}`)
       .then((res) => {
-        setReview(res.data);
-        setSelectedIssueIds([]);
-        setFixPreview(null);
-        setFixPullRequestUrl(null);
+        applyLoadedReview(res.data, selectedRepositoryId, id);
       })
       .catch((error) => {
         console.error(error);
-        setReview(null);
       });
-  };
+  }, [applyLoadedReview, id, selectedRepositoryId]);
 
   useEffect(() => {
-    loadReview();
-  }, [id, selectedRepositoryId]);
+    if (selectedRepositoryId === null || !id) {
+      return;
+    }
+
+    let ignore = false;
+
+    api.get(`/repositories/${selectedRepositoryId}/reviews/${id}`)
+      .then((res) => {
+        if (!ignore) {
+          applyLoadedReview(res.data, selectedRepositoryId, id);
+        }
+      })
+      .catch((error) => {
+        if (!ignore) {
+          console.error(error);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [applyLoadedReview, id, selectedRepositoryId]);
 
   const isResolvedByMergedFix = (issue: Issue) =>
     issue.fix_status === "FIX_MERGED" || Boolean(issue.fix_merged_at);
@@ -152,6 +186,12 @@ export default function ReviewDetail() {
       ? `${resolvedAt} by ${issue.resolved_by}`
       : resolvedAt;
   };
+
+  const review =
+    reviewState?.repositoryId === selectedRepositoryId
+    && reviewState.reviewId === id
+      ? reviewState.data
+      : null;
 
   const eligibleIssueIds = review?.issues
     .filter((issue) => issue.eligible_for_fix)

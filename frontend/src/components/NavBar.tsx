@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { useRepository } from "../context/RepositoryContext";
+import { useRepository } from "../context/useRepository";
 
 export default function Navbar() {
   const {
