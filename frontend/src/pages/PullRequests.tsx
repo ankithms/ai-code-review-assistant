@@ -5,7 +5,7 @@ import { useRepository } from "../context/useRepository";
 type PullRequest = {
   id: number;
   github_pr_id: number;
-  pull_request_number: number;
+  pull_request_number: number | null;
   title: string;
   repository: string;
   author: string;
@@ -89,7 +89,11 @@ export default function PullRequests() {
                       <span className="file-path">{pr.repository}</span>
                     </td>
                     <td>{pr.author}</td>
-                    <td>#{pr.pull_request_number}</td>
+                    <td>
+                      {pr.pull_request_number === null
+                        ? "Not captured"
+                        : `#${pr.pull_request_number}`}
+                    </td>
                   </tr>
                 ))}
               </tbody>

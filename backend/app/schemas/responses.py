@@ -93,7 +93,7 @@ class AnalyticsResponse(BaseModel):
 class PullRequestResponse(BaseModel):
     id: int
     github_pr_id: int
-    pull_request_number: int
+    pull_request_number: int | None = None
     title: str
     repository: str
     author: str
