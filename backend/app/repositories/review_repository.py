@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
+    FixPullRequest,
     PullRequest,
     Review,
     Issue,
@@ -10,6 +11,8 @@ from app.db.models import (
 from app.repositories.repository_repository import get_or_create_repository
 
 from app.schemas.output import (
+    FixPullRequestStatus,
+    IssueFixStatus,
     IssueStatus,
     PullRequestSchema,
     ReviewResponseSchema,
@@ -58,6 +61,7 @@ def save_review(
     db.flush()
 
     for issue_data in review_data.issues:
+        fix = getattr(issue_data, "fix", None)
 
         issue = Issue(
             review_id=review.id,
@@ -67,6 +71,16 @@ def save_review(
             line=issue_data.line,
             comment=issue_data.comment,
             impact=issue_data.impact,
+            fix_file_path=fix.file_path if fix else None,
+            fix_start_line=fix.start_line if fix else None,
+            fix_end_line=fix.end_line if fix else None,
+            fix_replacement_code=fix.replacement_code if fix else None,
+            fix_explanation=fix.explanation if fix else None,
+            fix_status=(
+                IssueFixStatus.FIX_GENERATED.value
+                if fix
+                else IssueFixStatus.NO_FIX.value
+            ),
             github_review_thread_id=issue_data.github_review_thread_id,
             github_comment_id=issue_data.github_comment_id,
             github_comment_node_id=issue_data.github_comment_node_id,
@@ -90,7 +104,11 @@ def get_review_by_id_for_repository(
     return (
         db.query(Review)
         .join(PullRequest)
-        .options(joinedload(Review.issues))
+        .options(
+            joinedload(Review.issues).joinedload(Issue.fix_pull_requests),
+            joinedload(Review.fix_pull_requests).joinedload(FixPullRequest.issues),
+            joinedload(Review.pull_request),
+        )
         .filter(
             Review.id == review_id,
             PullRequest.repository_id == repository_id,
@@ -202,11 +220,14 @@ def update_issue_status(
     status,
 ) -> Issue:
     resolved_status = _coerce_issue_status(status)
+    if _issue_has_merged_fix(issue) and resolved_status != IssueStatus.RESOLVED:
+        raise ValueError("Issues fixed by a merged AI Fix PR must remain RESOLVED")
+
     issue.status = resolved_status.value
 
     if resolved_status == IssueStatus.RESOLVED:
         if issue.resolved_at is None:
-            issue.resolved_at = datetime.now(UTC)
+            issue.resolved_at = _merged_fix_resolved_at(issue) or datetime.now(UTC)
     else:
         issue.resolved_at = None
         issue.resolved_by = None
@@ -215,3 +236,56 @@ def update_issue_status(
     db.refresh(issue)
 
     return issue
+
+
+def reconcile_merged_fix_issue_statuses(db: Session, review: Review) -> int:
+    updated_count = 0
+    for issue in review.issues:
+        if not _issue_has_merged_fix(issue):
+            continue
+
+        resolved_at = _merged_fix_resolved_at(issue) or datetime.now(UTC)
+        changed = False
+
+        if issue.status != IssueStatus.RESOLVED.value:
+            issue.status = IssueStatus.RESOLVED.value
+            changed = True
+
+        if issue.fix_status != IssueFixStatus.FIX_MERGED.value:
+            issue.fix_status = IssueFixStatus.FIX_MERGED.value
+            changed = True
+
+        if issue.resolved_at is None:
+            issue.resolved_at = resolved_at
+            changed = True
+
+        if changed:
+            db.add(issue)
+            updated_count += 1
+
+    if updated_count:
+        db.commit()
+
+    return updated_count
+
+
+def _issue_has_merged_fix(issue: Issue) -> bool:
+    if issue.fix_status == IssueFixStatus.FIX_MERGED.value:
+        return True
+
+    return any(
+        fix_pull_request.status == FixPullRequestStatus.MERGED.value
+        for fix_pull_request in issue.fix_pull_requests
+    )
+
+
+def _merged_fix_resolved_at(issue: Issue):
+    merged_times = [
+        fix_pull_request.merged_at
+        for fix_pull_request in issue.fix_pull_requests
+        if (
+            fix_pull_request.status == FixPullRequestStatus.MERGED.value
+            and fix_pull_request.merged_at is not None
+        )
+    ]
+    return max(merged_times) if merged_times else None

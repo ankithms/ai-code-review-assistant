@@ -7,7 +7,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from app.db.models import Issue, PullRequest, Review
-from app.schemas.output import IssueStatus
+from app.schemas.output import IssueFixStatus, IssueStatus
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ def sync_issue_statuses_from_github(
         .join(PullRequest)
         .filter(PullRequest.repository_id == repository_id)
         .filter(Issue.github_review_thread_id.isnot(None))
+        .filter(Issue.fix_status != IssueFixStatus.FIX_MERGED.value)
         .filter(Issue.status != IssueStatus.IGNORED.value)
     )
     if pull_request_id is not None:

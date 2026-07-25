@@ -2,12 +2,14 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.db.models import Review
+from app.db.models import FixPullRequest, Repository, Review
 from app.repositories.review_job_repository import (
     SUCCESS,
     create_review_job,
@@ -15,6 +17,8 @@ from app.repositories.review_job_repository import (
     get_latest_review_job_by_commit,
     mark_review_job_failed,
 )
+from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
+from app.services.github_native_fix_service import handle_github_native_fix_comment
 from app.tasks.review_tasks import process_review_job
 
 logger = logging.getLogger(__name__)
@@ -41,11 +45,25 @@ async def github_webhook(
         ) from exc
 
     action = payload.get("action")
+    event = request.headers.get("X-GitHub-Event")
 
-    if action not in ["opened", "reopened", "synchronize"]:
+    if event in {"issue_comment", "pull_request_review_comment"} and action == "created":
+        if handle_github_native_fix_comment(
+            db=db,
+            payload=payload,
+            event=event,
+            access_token=os.getenv("GITHUB_ACCESS_TOKEN"),
+        ):
+            return {
+                "status": "tracked",
+                "action": action,
+                "event": event,
+            }
+
         return {
             "status": "ignored",
             "action": action,
+            "event": event,
         }
 
     pull_request = payload.get("pull_request")
@@ -61,6 +79,23 @@ async def github_webhook(
     commit_sha = (pull_request.get("head") or {}).get("sha")
     base_commit_sha = payload.get("before") if action == "synchronize" else None
     head_commit_sha = payload.get("after") or commit_sha
+
+    if _handle_fix_pull_request_webhook(
+        db=db,
+        repository_full_name=repository_full_name,
+        action=action,
+        pull_request=pull_request,
+    ):
+        return {
+            "status": "tracked",
+            "action": action,
+        }
+
+    if action not in ["opened", "reopened", "synchronize"]:
+        return {
+            "status": "ignored",
+            "action": action,
+        }
 
     if not repository_full_name or not pull_request_number or not commit_sha:
         raise HTTPException(
@@ -134,6 +169,99 @@ async def github_webhook(
         "status": "queued",
         "job_id": job.id,
     }
+
+
+def _handle_fix_pull_request_webhook(
+    db: Session,
+    repository_full_name: str | None,
+    action: str | None,
+    pull_request: dict,
+) -> bool:
+    if action not in {"opened", "reopened", "synchronize", "closed"}:
+        return False
+
+    fix_pull_request = _find_fix_pull_request(
+        db=db,
+        repository_full_name=repository_full_name,
+        pull_request=pull_request,
+    )
+    if fix_pull_request is None:
+        return False
+
+    now = datetime.now(UTC)
+    fix_pull_request.updated_at = now
+
+    if action in {"opened", "reopened"}:
+        fix_pull_request.status = FixPullRequestStatus.PR_CREATED.value
+        fix_pull_request.closed_at = None
+        fix_pull_request.failure_message = None
+        for issue in fix_pull_request.issues:
+            if issue.status == IssueStatus.OPEN.value:
+                issue.fix_status = IssueFixStatus.FIX_PR_CREATED.value
+                db.add(issue)
+    elif action == "synchronize":
+        fix_pull_request.status = FixPullRequestStatus.PR_CREATED.value
+        head_sha = (pull_request.get("head") or {}).get("sha")
+        if head_sha:
+            fix_pull_request.github_commit_sha = head_sha
+    elif action == "closed":
+        if pull_request.get("merged"):
+            fix_pull_request.status = FixPullRequestStatus.MERGED.value
+            if fix_pull_request.merged_at is None:
+                fix_pull_request.merged_at = now
+            for issue in fix_pull_request.issues:
+                issue.status = IssueStatus.RESOLVED.value
+                if issue.resolved_at is None:
+                    issue.resolved_at = fix_pull_request.merged_at or now
+                issue.fix_status = IssueFixStatus.FIX_MERGED.value
+                db.add(issue)
+        else:
+            fix_pull_request.status = FixPullRequestStatus.CLOSED.value
+            if fix_pull_request.closed_at is None:
+                fix_pull_request.closed_at = now
+            for issue in fix_pull_request.issues:
+                if issue.status == IssueStatus.OPEN.value:
+                    issue.fix_status = IssueFixStatus.FIX_PR_CLOSED.value
+                    db.add(issue)
+
+    db.add(fix_pull_request)
+    db.commit()
+    return True
+
+
+def _find_fix_pull_request(
+    db: Session,
+    repository_full_name: str | None,
+    pull_request: dict,
+) -> FixPullRequest | None:
+    if not repository_full_name:
+        return None
+
+    query = (
+        db.query(FixPullRequest)
+        .join(Repository)
+        .filter(Repository.full_name == repository_full_name)
+    )
+    github_pr_number = pull_request.get("number")
+    head_ref = (pull_request.get("head") or {}).get("ref")
+
+    if github_pr_number is not None:
+        fix_pull_request = (
+            query
+            .filter(FixPullRequest.github_pr_number == github_pr_number)
+            .one_or_none()
+        )
+        if fix_pull_request is not None:
+            return fix_pull_request
+
+    if head_ref:
+        return (
+            query
+            .filter(FixPullRequest.fix_branch == head_ref)
+            .one_or_none()
+        )
+
+    return None
 
 
 def verify_github_signature(request, body):

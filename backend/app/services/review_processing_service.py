@@ -29,6 +29,11 @@ from app.repositories.review_repository import (
     save_review,
 )
 from app.schemas.output import PullRequestSchema
+from app.services.suggestion_eligibility_service import (
+    LARGE_FIX_FALLBACK_MESSAGE,
+    SuggestionEligibilityService,
+    issue_has_structured_fix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +97,11 @@ def _process_pull_request_review(db, job) -> None:
             job.commit_sha,
             existing_review.id,
         )
+        pull_request = get_pull_request(
+            repository=job.repository,
+            pull_request_number=job.pull_request_number,
+            access_token=token,
+        )
         _post_github_comments(
             review=existing_review,
             files=files,
@@ -99,6 +109,7 @@ def _process_pull_request_review(db, job) -> None:
             repository=job.repository,
             pull_request_number=job.pull_request_number,
             commit_sha=job.commit_sha,
+            current_head_sha=(pull_request.get("head") or {}).get("sha"),
             access_token=token,
         )
         return
@@ -213,6 +224,7 @@ def _process_pull_request_review(db, job) -> None:
         repository=job.repository,
         pull_request_number=job.pull_request_number,
         commit_sha=job.commit_sha,
+        current_head_sha=(pull_request.get("head") or {}).get("sha"),
         access_token=token,
     )
 
@@ -679,11 +691,20 @@ def _post_github_comments(
     pull_request_number: int,
     commit_sha: str,
     access_token: str,
+    current_head_sha: str | None = None,
 ) -> None:
     skipped_inline_comments = 0
     failed_inline_comments = 0
+    suggestion_service = SuggestionEligibilityService()
 
     for issue in review.issues:
+        if getattr(issue, "github_comment_id", None):
+            logger.info(
+                "Skipping already posted GitHub review comment for issue id=%s",
+                getattr(issue, "id", None),
+            )
+            continue
+
         logger.info(
             "Processing issue: file=%s line=%s category=%s",
             issue.file,
@@ -707,7 +728,20 @@ def _post_github_comments(
 
         file_entry = _get_file_entry_for_issue(files, issue.file)
         actual_file_path = file_entry.get("filename") if file_entry else issue.file
-        comment_body = _format_issue_comment_body(issue)
+        suggestion = suggestion_service.evaluate(
+            issue=issue,
+            all_issues=review.issues,
+            files=files,
+            repository=repository,
+            source_commit_sha=commit_sha,
+            current_head_sha=current_head_sha,
+            access_token=access_token,
+        )
+        comment_body = _format_issue_comment_body(
+            issue,
+            suggested_change=suggestion.markdown,
+            suggestion_rejection_reason=suggestion.reason,
+        )
 
         comment_payload = {
             "repository": repository,
@@ -717,6 +751,9 @@ def _post_github_comments(
             "file_path": actual_file_path,
             "body": comment_body,
         }
+
+        if suggestion.eligible and suggestion.anchor:
+            anchor_info = (suggestion.anchor, None)
 
         if anchor_info is None:
             skipped_inline_comments += 1
@@ -736,7 +773,7 @@ def _post_github_comments(
             )
             continue
 
-        anchor, fallback_position = anchor_info
+        anchor, _fallback_position = anchor_info
         comment_payload.update(anchor)
 
         logger.info(
@@ -768,39 +805,6 @@ def _post_github_comments(
                 anchor,
                 exc,
             )
-            if fallback_position is not None:
-                fallback_payload = {
-                    **comment_payload,
-                    "position": fallback_position,
-                }
-                for key in ("line", "side", "start_line", "start_side"):
-                    fallback_payload.pop(key, None)
-
-                try:
-                    response = post_inline_comment(**fallback_payload)
-                    _attach_github_inline_metadata(
-                        issue=issue,
-                        response=response,
-                        repository=repository,
-                        pull_request_number=pull_request_number,
-                        access_token=access_token,
-                    )
-                    logger.info(
-                        "Posted inline comment for %s:%s using fallback position=%s",
-                        issue.file,
-                        issue.line,
-                        fallback_position,
-                    )
-                    continue
-                except Exception as fallback_exc:
-                    logger.warning(
-                        "Failed to post inline fallback comment for %s:%s at position=%s; %s",
-                        issue.file,
-                        issue.line,
-                        fallback_position,
-                        fallback_exc,
-                    )
-
             failed_inline_comments += 1
             _post_inline_fallback_comment(
                 repository=repository,
@@ -893,21 +897,43 @@ def _format_category(category) -> str:
     return _enum_value(category).replace("_", " ").replace("-", " ").title()
 
 
-def _format_issue_comment_body(issue) -> str:
+def _format_issue_comment_body(
+    issue,
+    suggested_change: str | None = None,
+    suggestion_rejection_reason: str | None = None,
+) -> str:
     problem, suggested_fix, impact, example = _split_issue_comment_sections(issue.comment)
     impact = getattr(issue, "impact", None) or impact
     parts = [_format_issue_header(issue)]
 
-    parts.extend(["", problem])
-
-    if suggested_fix:
-        parts.extend(["", "Suggested Fix:", suggested_fix])
+    parts.extend(["", "Problem", "", problem])
 
     if impact:
-        parts.extend(["", "Impact:", impact])
+        parts.extend(["", "Why this matters", "", impact])
 
     if example:
-        parts.extend(["", "Example:", f"```\n{example}\n```"])
+        parts.extend(["", "Example", "", f"```\n{example}\n```"])
+
+    if suggested_fix or suggested_change or issue_has_structured_fix(issue):
+        parts.extend(["", "Suggested Fix"])
+
+    if suggested_fix:
+        parts.extend(["", suggested_fix])
+
+    if suggested_change:
+        parts.extend(["", suggested_change])
+    elif issue_has_structured_fix(issue):
+        fallback_text = (
+            suggestion_rejection_reason
+            if suggestion_rejection_reason == LARGE_FIX_FALLBACK_MESSAGE
+            else LARGE_FIX_FALLBACK_MESSAGE
+        )
+        parts.extend([
+            "",
+            fallback_text,
+            "",
+            "Reply `/ai-fix` to create a separate AI Fix PR for this finding.",
+        ])
 
     return "\n".join(parts)
 
@@ -921,7 +947,7 @@ def _format_issue_header(issue) -> str:
     }
 
     marker = severity_markers.get(severity.lower(), "⚪")
-    return f"{marker} {severity.upper()} · {_format_category(issue.category)}"
+    return f"{marker} {severity.title()} Severity\nCategory: {_format_category(issue.category)}"
 
 
 def _split_issue_comment_sections(comment: str) -> tuple[str, str | None, str | None, str | None]:
@@ -951,6 +977,10 @@ def _split_issue_comment_sections(comment: str) -> tuple[str, str | None, str | 
         sections[label] = normalized_comment[section_start:section_end].strip()
 
     return problem, sections["suggested fix"], sections["impact"], sections["example"]
+
+
+def _issue_has_structured_fix(issue) -> bool:
+    return issue_has_structured_fix(issue)
 
 
 def _post_inline_fallback_comment(

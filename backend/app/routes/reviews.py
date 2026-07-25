@@ -10,6 +10,7 @@ from app.repositories.review_repository import (
     get_issue_by_id_for_repository,
     get_review_by_id_for_repository,
     get_reviews_for_repository,
+    reconcile_merged_fix_issue_statuses,
     update_issue_status,
 )
 from app.services.github_thread_sync_service import sync_issue_statuses_from_github
@@ -85,6 +86,14 @@ def get_review(
                 review_id=review_id,
                 repository_id=repository_id,
             )
+
+    reconciled_count = reconcile_merged_fix_issue_statuses(db, review)
+    if reconciled_count:
+        review = get_review_by_id_for_repository(
+            db=db,
+            review_id=review_id,
+            repository_id=repository_id,
+        )
 
     return review
 

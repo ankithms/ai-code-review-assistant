@@ -1,3 +1,5 @@
+import base64
+
 import requests
 
 TIMEOUT_SECONDS = 15
@@ -66,6 +68,151 @@ def get_compare_files(
     return response.json().get("files", [])
 
 
+def get_file_content(
+    repository,
+    file_path,
+    ref,
+    access_token,
+):
+    response = requests.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/contents/{file_path}",
+        headers=_headers(access_token),
+        params={"ref": ref},
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    content = payload.get("content") or ""
+
+    return {
+        "path": payload.get("path") or file_path,
+        "sha": payload.get("sha"),
+        "content": base64.b64decode(content).decode("utf-8"),
+    }
+
+
+def get_ref(repository, branch_name, access_token):
+    response = requests.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/ref/heads/{branch_name}",
+        headers=_headers(access_token),
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def create_ref(repository, branch_name, sha, access_token):
+    response = requests.post(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/refs",
+        headers=_headers(access_token),
+        json={
+            "ref": f"refs/heads/{branch_name}",
+            "sha": sha,
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def update_ref(repository, branch_name, sha, access_token, force=False):
+    response = requests.patch(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/refs/heads/{branch_name}",
+        headers=_headers(access_token),
+        json={
+            "sha": sha,
+            "force": force,
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def get_git_commit(repository, commit_sha, access_token):
+    response = requests.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/commits/{commit_sha}",
+        headers=_headers(access_token),
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def create_blob(repository, content, access_token):
+    response = requests.post(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/blobs",
+        headers=_headers(access_token),
+        json={
+            "content": content,
+            "encoding": "utf-8",
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def create_tree(repository, base_tree_sha, tree_items, access_token):
+    response = requests.post(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/trees",
+        headers=_headers(access_token),
+        json={
+            "base_tree": base_tree_sha,
+            "tree": tree_items,
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def create_commit(repository, message, tree_sha, parent_sha, access_token):
+    response = requests.post(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/commits",
+        headers=_headers(access_token),
+        json={
+            "message": message,
+            "tree": tree_sha,
+            "parents": [parent_sha],
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def create_pull_request(
+    repository,
+    head_branch,
+    base_branch,
+    title,
+    body,
+    access_token,
+):
+    response = requests.post(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/pulls",
+        headers=_headers(access_token),
+        json={
+            "head": head_branch,
+            "base": base_branch,
+            "title": title,
+            "body": body,
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
 def post_pr_comment(
     repository,
     pull_request_number,
@@ -75,6 +222,26 @@ def post_pr_comment(
 
     response = requests.post(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/{pull_request_number}/comments",
+        headers=_headers(access_token),
+        json={
+            "body": body
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    return response.json()
+
+
+def reply_to_review_comment(
+    repository,
+    pull_request_number,
+    parent_comment_id,
+    access_token,
+    body,
+):
+    response = requests.post(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/pulls/{pull_request_number}/comments/{parent_comment_id}/replies",
         headers=_headers(access_token),
         json={
             "body": body

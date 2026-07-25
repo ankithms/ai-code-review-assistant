@@ -4,16 +4,25 @@ from sqlalchemy import (
     DateTime,
     Integer,
     String,
+    Table,
     Text,
-    ForeignKey
+    ForeignKey,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import declarative_base
 from datetime import UTC, datetime
 
-from app.schemas.output import IssueStatus
+from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
 
 Base = declarative_base()
+
+
+fix_pull_request_issues = Table(
+    "fix_pull_request_issues",
+    Base.metadata,
+    Column("fix_pull_request_id", ForeignKey("fix_pull_requests.id"), primary_key=True),
+    Column("issue_id", ForeignKey("issues.id"), primary_key=True),
+)
 
 
 class PullRequest(Base):
@@ -40,6 +49,11 @@ class PullRequest(Base):
         back_populates="pull_request"
     )
 
+    fix_pull_requests = relationship(
+        "FixPullRequest",
+        back_populates="original_pull_request",
+    )
+
 
 class Repository(Base):
     __tablename__ = "repositories"
@@ -49,6 +63,11 @@ class Repository(Base):
 
     pull_requests = relationship(
         "PullRequest",
+        back_populates="repository_ref",
+    )
+
+    fix_pull_requests = relationship(
+        "FixPullRequest",
         back_populates="repository_ref",
     )
 
@@ -76,6 +95,11 @@ class Review(Base):
         back_populates="review"
     )
 
+    fix_pull_requests = relationship(
+        "FixPullRequest",
+        back_populates="review",
+    )
+
 
 class Issue(Base):
     __tablename__ = "issues"
@@ -93,6 +117,19 @@ class Issue(Base):
     comment = Column(Text)
     line = Column(Integer)
     impact = Column(Text)
+    fix_file_path = Column(String(255))
+    fix_start_line = Column(Integer)
+    fix_end_line = Column(Integer)
+    fix_replacement_code = Column(Text)
+    fix_explanation = Column(Text)
+    fix_status = Column(
+        String(30),
+        nullable=False,
+        default=IssueFixStatus.NO_FIX.value,
+        server_default=IssueFixStatus.NO_FIX.value,
+    )
+    fix_base_commit_sha = Column(String)
+    fix_file_sha = Column(String)
     github_review_thread_id = Column(String(255))
     github_comment_id = Column(BigInteger)
     github_comment_node_id = Column(String(255))
@@ -110,6 +147,88 @@ class Issue(Base):
         "Review",
         back_populates="issues"
     )
+
+    fix_pull_requests = relationship(
+        "FixPullRequest",
+        secondary=fix_pull_request_issues,
+        back_populates="issues",
+    )
+
+    @property
+    def blocking_fix_pull_request(self):
+        blocking_statuses = {
+            FixPullRequestStatus.PR_CREATED.value,
+            FixPullRequestStatus.MERGED.value,
+        }
+        matching_pull_requests = [
+            fix_pull_request
+            for fix_pull_request in self.fix_pull_requests
+            if fix_pull_request.status in blocking_statuses
+        ]
+
+        return sorted(
+            matching_pull_requests,
+            key=lambda fix_pull_request: fix_pull_request.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )[0] if matching_pull_requests else None
+
+    @property
+    def latest_fix_pull_request(self):
+        if not self.fix_pull_requests:
+            return None
+
+        return sorted(
+            self.fix_pull_requests,
+            key=lambda fix_pull_request: fix_pull_request.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )[0]
+
+    @property
+    def eligible_for_fix(self):
+        return (
+            self.status == IssueStatus.OPEN.value
+            and self.blocking_fix_pull_request is None
+        )
+
+    @property
+    def fix_pr_number(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.github_pr_number if fix_pull_request else None
+
+    @property
+    def fix_pr_url(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.github_pr_url if fix_pull_request else None
+
+    @property
+    def fix_commit_sha(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.github_commit_sha if fix_pull_request else None
+
+    @property
+    def fix_commit_url(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.github_commit_url if fix_pull_request else None
+
+    @property
+    def fix_branch(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.fix_branch if fix_pull_request else None
+
+    @property
+    def fix_created_at(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.created_at if fix_pull_request else None
+
+    @property
+    def fix_merged_at(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.merged_at if fix_pull_request else None
+
+    @property
+    def fix_closed_at(self):
+        fix_pull_request = self.latest_fix_pull_request
+        return fix_pull_request.closed_at if fix_pull_request else None
 
 
 class ReviewJob(Base):
@@ -131,3 +250,81 @@ class ReviewJob(Base):
     started_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
     error_message = Column(Text)
+
+
+class FixCommit(Base):
+    __tablename__ = "fix_commits"
+
+    id = Column(Integer, primary_key=True)
+    review_id = Column(Integer, ForeignKey("reviews.id"), nullable=False)
+    pull_request_id = Column(Integer, ForeignKey("pull_requests.id"), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    created_by = Column(String(255))
+    github_commit_sha = Column(String)
+    status = Column(String(30), nullable=False)
+    applied_issue_ids = Column(Text, nullable=False)
+    branch_name = Column(String(255))
+    pull_request_url = Column(Text)
+    mode = Column(String(30), nullable=False)
+    error_message = Column(Text)
+
+
+class FixPullRequest(Base):
+    __tablename__ = "fix_pull_requests"
+
+    id = Column(Integer, primary_key=True)
+    repository_id = Column(Integer, ForeignKey("repositories.id"), nullable=False)
+    review_id = Column(Integer, ForeignKey("reviews.id"), nullable=False)
+    original_pull_request_id = Column(Integer, ForeignKey("pull_requests.id"), nullable=False)
+    original_pr_number = Column(Integer, nullable=False)
+    source_commit_sha = Column(String, nullable=False)
+    fix_branch = Column(String(255), nullable=False)
+    github_pr_number = Column(Integer, nullable=False)
+    github_pr_url = Column(Text, nullable=False)
+    github_commit_sha = Column(String)
+    github_commit_url = Column(Text)
+    status = Column(
+        String(30),
+        nullable=False,
+        default=FixPullRequestStatus.PR_CREATED.value,
+        server_default=FixPullRequestStatus.PR_CREATED.value,
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    merged_at = Column(DateTime(timezone=True))
+    closed_at = Column(DateTime(timezone=True))
+    failure_message = Column(Text)
+
+    repository_ref = relationship(
+        "Repository",
+        back_populates="fix_pull_requests",
+    )
+    review = relationship(
+        "Review",
+        back_populates="fix_pull_requests",
+    )
+    original_pull_request = relationship(
+        "PullRequest",
+        back_populates="fix_pull_requests",
+    )
+    issues = relationship(
+        "Issue",
+        secondary=fix_pull_request_issues,
+        back_populates="fix_pull_requests",
+    )
+
+    @property
+    def issue_ids(self):
+        return [issue.id for issue in self.issues]

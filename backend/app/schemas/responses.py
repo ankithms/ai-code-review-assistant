@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from app.schemas.output import IssueStatus
+from app.schemas.fixes import FixPullRequestResponse, IssueFixResponse
 
 
 class IssueResponse(BaseModel):
@@ -14,10 +15,41 @@ class IssueResponse(BaseModel):
     status: IssueStatus
     resolved_at: datetime | None = None
     resolved_by: str | None = None
+    fix_status: str
+    fix_file_path: str | None = None
+    fix_start_line: int | None = None
+    fix_end_line: int | None = None
+    fix_replacement_code: str | None = None
+    fix_explanation: str | None = None
+    eligible_for_fix: bool
+    fix_pr_number: int | None = None
+    fix_pr_url: str | None = None
+    fix_commit_sha: str | None = None
+    fix_commit_url: str | None = None
+    fix_branch: str | None = None
+    fix_created_at: datetime | None = None
+    fix_merged_at: datetime | None = None
+    fix_closed_at: datetime | None = None
 
     model_config = {
         "from_attributes": True
     }
+
+    @computed_field
+    @property
+    def fix(self) -> IssueFixResponse | None:
+        if not self.fix_file_path:
+            return None
+
+        return IssueFixResponse(
+            issue_id=self.id,
+            status=self.fix_status,
+            file_path=self.fix_file_path,
+            start_line=self.fix_start_line,
+            end_line=self.fix_end_line,
+            replacement_code=self.fix_replacement_code,
+            explanation=self.fix_explanation,
+        )
 
 
 class ReviewDetailResponse(BaseModel):
@@ -25,6 +57,7 @@ class ReviewDetailResponse(BaseModel):
     pr_id: int
     summary: str
     issues: list[IssueResponse]
+    fix_pull_requests: list[FixPullRequestResponse]
 
     model_config = {
         "from_attributes": True

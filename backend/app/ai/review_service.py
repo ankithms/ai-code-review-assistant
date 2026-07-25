@@ -64,6 +64,7 @@ For each issue, provide:
 - a short suggested fix in the same comment under a "Suggested Fix:" label
 - an optional short "Example:" section only when a minimal code example makes the fix materially clearer
 - a concise impact sentence explaining what breaks or why the issue matters
+- an optional structured fix only when a small, safe line-range replacement is obvious
 
 Categories must be one of:
 - security
@@ -90,6 +91,8 @@ Output requirements:
 - Prefer short, practical guidance over long explanations.
 - Do not include severity, category, impact, file, or line in the comment text; those are separate structured fields.
 - Return an impact sentence for each issue.
+- For structured fixes, never rewrite an entire file. Provide only file_path, start_line, end_line, replacement_code, and explanation for the smallest safe replacement.
+- Omit structured fixes when the correct code change is uncertain or would require broad refactoring.
 - Avoid duplicate findings.
 - Do not include vague suggestions like "consider improving this".
 - Be direct and evidence-based.

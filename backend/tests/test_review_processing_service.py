@@ -177,7 +177,11 @@ class GithubCommentPostingTests(unittest.TestCase):
             patch.dict(os.environ, {"GITHUB_ACCESS_TOKEN": "token"}),
             patch.object(review_processing_service, "get_pr_files", return_value=files),
             patch.object(review_processing_service, "_post_github_comments") as post_github_comments,
-            patch.object(review_processing_service, "get_pull_request") as get_pull_request,
+            patch.object(
+                review_processing_service,
+                "get_pull_request",
+                return_value={"head": {"sha": "abc123"}},
+            ) as get_pull_request,
             patch.object(review_processing_service, "review_code") as review_code,
             patch.object(review_processing_service, "save_review") as save_review,
         ):
@@ -190,9 +194,10 @@ class GithubCommentPostingTests(unittest.TestCase):
             repository="owner/repo",
             pull_request_number=12,
             commit_sha="abc123",
+            current_head_sha="abc123",
             access_token="token",
         )
-        get_pull_request.assert_not_called()
+        get_pull_request.assert_called_once()
         review_code.assert_not_called()
         save_review.assert_not_called()
 
@@ -480,9 +485,9 @@ class GithubCommentPostingTests(unittest.TestCase):
             )
 
         body = post_inline_comment.call_args.kwargs["body"]
-        self.assertIn("🟠 MEDIUM · Edge Case", body)
+        self.assertIn("🟠 Medium Severity\nCategory: Edge Case", body)
         self.assertIn("This misses an edge case.", body)
-        self.assertIn("Impact:\nThe edge case can produce an incorrect result.", body)
+        self.assertIn("Why this matters\n\nThe edge case can produce an incorrect result.", body)
         self.assertNotIn("Confidence:", body)
 
     def test_formats_inline_comment_with_suggested_fix_and_impact(self):
@@ -501,17 +506,74 @@ class GithubCommentPostingTests(unittest.TestCase):
 
         self.assertEqual(
             body,
-            "🔴 HIGH · Bug\n"
+            "🔴 High Severity\n"
+            "Category: Bug\n"
+            "\n"
+            "Problem\n"
             "\n"
             "The 'requests' module is used without being imported. "
             "This raises a NameError when the code path executes.\n"
             "\n"
-            "Suggested Fix:\n"
-            "import requests\n"
+            "Why this matters\n"
             "\n"
-            "Impact:\n"
-            "The HTTP request will never be executed because the application crashes first.",
+            "The HTTP request will never be executed because the application crashes first.\n"
+            "\n"
+            "Suggested Fix\n"
+            "\n"
+            "import requests",
         )
+
+    def test_formats_small_structured_fix_as_github_suggestion(self):
+        issue = SimpleNamespace(
+            severity=SeverityEnum.high,
+            category=CategoryEnum.bug,
+            file="calculator.py",
+            line=8,
+            impact="The code crashes when user is None.",
+            comment=(
+                "Dereferencing a nullable variable may raise an AttributeError."
+                "Suggested Fix: Check for None before accessing the attribute."
+            ),
+            fix_file_path="calculator.py",
+            fix_start_line=8,
+            fix_end_line=8,
+            fix_replacement_code="if user is not None:\n    print(user.name)",
+        )
+
+        body = review_processing_service._format_issue_comment_body(
+            issue,
+            suggested_change="```suggestion\nif user is not None:\n    print(user.name)\n```",
+        )
+
+        self.assertIn("Suggested Fix\n\nCheck for None before accessing the attribute.", body)
+        self.assertIn("```suggestion\nif user is not None:\n    print(user.name)\n```", body)
+        self.assertNotIn("Reply `/ai-fix`", body)
+
+    def test_large_structured_fix_uses_ai_fix_command_hint(self):
+        issue = SimpleNamespace(
+            severity=SeverityEnum.medium,
+            category=CategoryEnum.bug,
+            file="calculator.py",
+            line=8,
+            impact="The code returns the wrong value.",
+            comment=(
+                "The calculation uses the wrong sequence."
+                "Suggested Fix: Replace the block with the corrected calculation."
+            ),
+            fix_file_path="calculator.py",
+            fix_start_line=1,
+            fix_end_line=12,
+            fix_replacement_code="\n".join(f"line_{index}" for index in range(12)),
+        )
+
+        body = review_processing_service._format_issue_comment_body(issue)
+
+        self.assertNotIn("```suggestion", body)
+        self.assertIn(
+            "This issue requires multiple coordinated changes and cannot be applied as a GitHub Suggestion.",
+            body,
+        )
+        self.assertIn("Reply `/ai-fix` to create a separate AI Fix PR", body)
 
     def test_formats_inline_comment_with_impact_from_comment_text(self):
         issue = SimpleNamespace(
@@ -526,8 +588,8 @@ class GithubCommentPostingTests(unittest.TestCase):
 
         body = review_processing_service._format_issue_comment_body(issue)
 
-        self.assertIn("Suggested Fix:\nimport requests", body)
-        self.assertIn("Impact:\nThe HTTP request will never be executed.", body)
+        self.assertIn("Suggested Fix\n\nimport requests", body)
+        self.assertIn("Why this matters\n\nThe HTTP request will never be executed.", body)
         self.assertNotIn("Confidence:", body)
 
     def test_omits_example_section_when_comment_has_no_example(self):
@@ -543,10 +605,10 @@ class GithubCommentPostingTests(unittest.TestCase):
 
         body = review_processing_service._format_issue_comment_body(issue)
 
-        self.assertIn("🟡 LOW · Readability", body)
-        self.assertIn("Suggested Fix:\nRename it to describe the value it stores.", body)
-        self.assertIn("Impact:\nFuture maintainers may misunderstand the value's purpose.", body)
-        self.assertNotIn("Example:", body)
+        self.assertIn("🟡 Low Severity\nCategory: Readability", body)
+        self.assertIn("Suggested Fix\n\nRename it to describe the value it stores.", body)
+        self.assertIn("Why this matters\n\nFuture maintainers may misunderstand the value's purpose.", body)
+        self.assertNotIn("Example", body)
 
     def test_filters_duplicate_issue_from_latest_review(self):
         previous_issues = [
@@ -789,7 +851,7 @@ class GithubCommentPostingTests(unittest.TestCase):
         self.assertEqual(inline_kwargs["line"], 2)
         self.assertEqual(inline_kwargs["side"], "RIGHT")
 
-    def test_inline_comment_failure_retries_with_diff_position(self):
+    def test_inline_comment_failure_does_not_retry_with_diff_position(self):
         review = SimpleNamespace(
             issues=[
                 SimpleNamespace(
@@ -813,12 +875,9 @@ class GithubCommentPostingTests(unittest.TestCase):
             patch.object(
                 review_processing_service,
                 "post_inline_comment",
-                side_effect=[
-                    RuntimeError(
-                        'GitHub inline comment failed: 422 {"message":"Validation Failed"}'
-                    ),
-                    {"id": 1},
-                ],
+                side_effect=RuntimeError(
+                    'GitHub inline comment failed: 422 {"message":"Validation Failed"}'
+                ),
             ) as post_inline_comment,
             patch.object(review_processing_service, "post_pr_comment") as post_pr_comment,
         ):
@@ -832,11 +891,11 @@ class GithubCommentPostingTests(unittest.TestCase):
                 access_token="token",
             )
 
-        self.assertEqual(post_inline_comment.call_count, 2)
-        fallback_kwargs = post_inline_comment.call_args_list[1].kwargs
-        self.assertEqual(fallback_kwargs["position"], 2)
-        self.assertNotIn("line", fallback_kwargs)
-        post_pr_comment.assert_called_once()
+        self.assertEqual(post_inline_comment.call_count, 1)
+        self.assertNotIn("position", post_inline_comment.call_args.kwargs)
+        self.assertEqual(post_pr_comment.call_count, 2)
+        fallback_body = post_pr_comment.call_args_list[0].kwargs["body"]
+        self.assertIn("GitHub rejected the inline comment", fallback_body)
 
     def test_inline_comment_failure_posts_fallback_pr_comment(self):
         review = SimpleNamespace(
@@ -878,7 +937,7 @@ class GithubCommentPostingTests(unittest.TestCase):
                 access_token="token",
             )
 
-        self.assertEqual(post_inline_comment.call_count, 2)
+        self.assertEqual(post_inline_comment.call_count, 1)
         self.assertEqual(post_pr_comment.call_count, 2)
         fallback_body = post_pr_comment.call_args_list[0].kwargs["body"]
         self.assertIn("`src/app.py:2`", fallback_body)

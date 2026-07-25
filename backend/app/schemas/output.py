@@ -23,6 +23,31 @@ class IssueStatus(str, Enum):
     IGNORED = "IGNORED"
 
 
+class IssueFixStatus(str, Enum):
+    NO_FIX = "NO_FIX"
+    FIX_GENERATED = "FIX_GENERATED"
+    FIX_COMMITTED = "FIX_COMMITTED"
+    FIX_PR_CREATED = "FIX_PR_CREATED"
+    FIX_MERGED = "FIX_MERGED"
+    FIX_PR_CLOSED = "FIX_PR_CLOSED"
+
+
+class FixPullRequestStatus(str, Enum):
+    PR_CREATED = "PR_CREATED"
+    MERGED = "MERGED"
+    CLOSED = "CLOSED"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+
+class IssueFixSchema(BaseModel):
+    file_path: str
+    start_line: int
+    end_line: int
+    replacement_code: str
+    explanation: str | None = None
+
+
 class IssueSchema(BaseModel):
     severity: SeverityEnum
     category: CategoryEnum
@@ -30,6 +55,7 @@ class IssueSchema(BaseModel):
     line: int | None = None
     comment: str
     impact: str | None = None
+    fix: IssueFixSchema | None = None
     github_review_thread_id: str | None = None
     github_comment_id: int | None = None
     github_comment_node_id: str | None = None
