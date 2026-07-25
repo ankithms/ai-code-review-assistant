@@ -1,3 +1,4 @@
+import os
 import unittest
 from datetime import UTC, datetime, timedelta
 
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Base, FixPullRequest, Issue, PullRequest, Repository, Review, ReviewJob
 from app.repositories.analytics_repository import get_analytics
 from app.repositories.review_repository import reconcile_merged_fix_issue_statuses, update_issue_status
+from app.routes.analytics import sync_analytics
 from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
 from app.services.github_thread_sync_service import sync_issue_statuses_from_github
 
@@ -454,6 +456,53 @@ class IssueStatusLifecycleTests(unittest.TestCase):
         self.assertEqual(analytics["top_problematic_files"][0], {"file": "src/db.py", "total_issues": 3})
         self.assertEqual(analytics["average_issues_per_pull_request"], 5)
         self.assertEqual(analytics["average_review_processing_time_seconds"], 12)
+
+    def test_sync_analytics_refreshes_github_statuses_before_returning_analytics(self):
+        repository = Repository(full_name="owner/repo")
+        self.session.add(repository)
+        self.session.flush()
+
+        pull_request = PullRequest(
+            repository_id=repository.id,
+            github_pr_id=1,
+            pull_request_number=1,
+            title="PR",
+            repository=repository.full_name,
+            author="user",
+        )
+        self.session.add(pull_request)
+        self.session.flush()
+
+        review = Review(pr_id=pull_request.id, summary="Summary", commit_sha="abc")
+        self.session.add(review)
+        self.session.flush()
+
+        self.session.add(
+            Issue(
+                review_id=review.id,
+                severity="high",
+                category="bug",
+                file="src/app.py",
+                comment="One",
+                status=IssueStatus.OPEN.value,
+            )
+        )
+        self.session.commit()
+
+        with (
+            patch.dict("os.environ", {"GITHUB_ACCESS_TOKEN": "token"}),
+            patch("app.routes.analytics.sync_issue_statuses_from_github") as sync_statuses,
+        ):
+            analytics = sync_analytics(repository.id, self.session)
+
+        sync_statuses.assert_called_once_with(
+            db=self.session,
+            repository_id=repository.id,
+            repository=repository.full_name,
+            access_token="token",
+        )
+        self.assertEqual(analytics["total_issues"], 1)
+        self.assertEqual(analytics["open_issues"], 1)
 
 
 if __name__ == "__main__":
