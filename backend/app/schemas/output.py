@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import List
 from enum import Enum
 
@@ -48,11 +48,24 @@ class IssueFixSchema(BaseModel):
     explanation: str | None = None
 
 
+class ReviewCommentSide(str, Enum):
+    RIGHT = "RIGHT"
+    LEFT = "LEFT"
+
+
 class IssueSchema(BaseModel):
     severity: SeverityEnum
     category: CategoryEnum
-    file: str
+    file: str | None = None
+    file_path: str | None = None
+    line_ref: str | None = None
     line: int | None = None
+    side: ReviewCommentSide | None = None
+    start_line: int | None = None
+    start_side: ReviewCommentSide | None = None
+    old_line: int | None = None
+    diff_hunk: str | None = None
+    source_commit_sha: str | None = None
     comment: str
     impact: str | None = None
     fix: IssueFixSchema | None = None
@@ -60,6 +73,14 @@ class IssueSchema(BaseModel):
     github_comment_id: int | None = None
     github_comment_node_id: str | None = None
     github_review_id: int | None = None
+
+    @model_validator(mode="after")
+    def normalize_file_path(self):
+        if self.file is None and self.file_path is not None:
+            self.file = self.file_path
+        if self.file_path is None and self.file is not None:
+            self.file_path = self.file
+        return self
 
 
 class ReviewResponseSchema(BaseModel):

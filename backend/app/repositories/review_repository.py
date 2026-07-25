@@ -69,6 +69,13 @@ def save_review(
             category=issue_data.category,
             file=issue_data.file,
             line=issue_data.line,
+            line_ref=getattr(issue_data, "line_ref", None),
+            side=_enum_value(getattr(issue_data, "side", None)),
+            start_line=getattr(issue_data, "start_line", None),
+            start_side=_enum_value(getattr(issue_data, "start_side", None)),
+            old_line=getattr(issue_data, "old_line", None),
+            diff_hunk=getattr(issue_data, "diff_hunk", None),
+            source_commit_sha=getattr(issue_data, "source_commit_sha", None),
             comment=issue_data.comment,
             impact=issue_data.impact,
             fix_file_path=fix.file_path if fix else None,
@@ -94,6 +101,14 @@ def save_review(
     db.refresh(review)
 
     return review
+
+
+def _enum_value(value) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        return value.value
+    return str(value)
 
 
 def get_review_by_id_for_repository(

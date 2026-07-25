@@ -29,6 +29,8 @@ from app.repositories.review_repository import (
     save_review,
 )
 from app.schemas.output import PullRequestSchema
+from app.services.diff_line_mapper import MultiFileDiffLineMapper
+from app.services.inline_comment_validator import InlineCommentValidator
 from app.services.suggestion_eligibility_service import (
     LARGE_FIX_FALLBACK_MESSAGE,
     SuggestionEligibilityService,
@@ -237,16 +239,11 @@ def _process_pull_request_review(db, job) -> None:
 
 
 def _build_diff(files: list[dict]) -> str:
-    full_diff = ""
+    diff_mapper = MultiFileDiffLineMapper.from_files(files)
+    if os.getenv("INLINE_COMMENT_MAPPING_DEBUG", "").lower() == "true":
+        diff_mapper.log_debug_mapping_tables()
 
-    for file in files:
-        patch = file.get("patch")
-
-        if patch:
-            full_diff += f"\n\nFILE: {file['filename']}\n"
-            full_diff += patch
-
-    return full_diff
+    return diff_mapper.annotated_diff()
 
 
 def _get_files_for_review(job, access_token: str) -> list[dict]:
@@ -291,10 +288,11 @@ def _filter_reviewable_files(files: list[dict]) -> list[dict]:
     reviewable_files = []
 
     for file in files:
-        if file.get("status") == "removed":
-            continue
-
         if not file.get("patch"):
+            logger.info(
+                "Skipping %s because GitHub did not provide patch data",
+                file.get("filename") or "unknown file",
+            )
             continue
 
         reviewable_files.append(file)
@@ -502,185 +500,7 @@ def _get_file_entry_for_issue(
         if normalized_filename == normalized_request_path:
             return file
 
-    for file in files:
-        filename = file.get("filename")
-        if not filename:
-            continue
-        normalized_filename = filename.replace('\\', '/')
-        if normalized_filename.endswith(normalized_request_path):
-            return file
-
-    for file in files:
-        filename = file.get("filename")
-        if not filename:
-            continue
-        normalized_filename = filename.replace('\\', '/')
-        if normalized_request_path.endswith(normalized_filename):
-            return file
-
     return None
-
-
-def _get_diff_anchor_for_issue(
-    files: list[dict],
-    file_path: str,
-    line_number: int,
-) -> tuple[dict[str, int | str], int | None] | None:
-    file_entry = _get_file_entry_for_issue(files, file_path)
-    if not file_entry:
-        logger.warning(
-            "Could not locate file %s in PR file list",
-            file_path,
-        )
-        return None
-
-    patch = file_entry.get("patch")
-    if not patch:
-        return None
-
-    return _map_new_line_to_diff_anchor(
-        patch=patch,
-        target_line=line_number,
-    )
-
-
-def _map_new_line_to_diff_anchor(
-    patch: str,
-    target_line: int,
-) -> tuple[dict[str, int | str], int | None] | None:
-    hunk_lines: list[dict[str, int | str]] = []
-    new_line = 0
-    position = 0
-
-    for raw_line in patch.splitlines():
-        if raw_line.startswith("@@"):
-            anchor = _select_anchor_from_hunk(hunk_lines, target_line)
-            if anchor:
-                return anchor
-
-            match = re.match(r"@@ -(?P<old_start>\d+)(?:,\d+)? \+(?P<new_start>\d+)(?:,\d+)? @@", raw_line)
-            if not match:
-                hunk_lines = []
-                new_line = 0
-                continue
-
-            hunk_lines = []
-            new_line = int(match.group("new_start"))
-            continue
-
-        if not raw_line:
-            continue
-
-        first_char = raw_line[0]
-
-        if first_char == " ":
-            position += 1
-            hunk_lines.append(
-                {
-                    "line": new_line,
-                    "side": "RIGHT",
-                    "content": raw_line[1:],
-                    "position": position,
-                }
-            )
-            new_line += 1
-        elif first_char == "+":
-            position += 1
-            hunk_lines.append(
-                {
-                    "line": new_line,
-                    "side": "RIGHT",
-                    "content": raw_line[1:],
-                    "position": position,
-                }
-            )
-            new_line += 1
-        elif first_char == "-":
-            position += 1
-        else:
-            position += 1
-
-    return _select_anchor_from_hunk(hunk_lines, target_line)
-
-
-def _select_anchor_from_hunk(
-    hunk_lines: list[dict[str, int | str]],
-    target_line: int,
-) -> tuple[dict[str, int | str], int | None] | None:
-    for index, hunk_line in enumerate(hunk_lines):
-        if hunk_line["line"] != target_line:
-            continue
-
-        if str(hunk_line["content"]).strip():
-            return (
-                {
-                    "line": hunk_line["line"],
-                    "side": hunk_line["side"],
-                },
-                int(hunk_line["position"]),
-            )
-
-        for nearby_line in reversed(hunk_lines[:index]):
-            if str(nearby_line["content"]).strip():
-                return (
-                    {
-                        "start_line": nearby_line["line"],
-                        "start_side": nearby_line["side"],
-                        "line": hunk_line["line"],
-                        "side": hunk_line["side"],
-                    },
-                    int(nearby_line["position"]),
-                )
-
-        for nearby_line in hunk_lines[index + 1:]:
-            if str(nearby_line["content"]).strip():
-                return (
-                    {
-                        "start_line": hunk_line["line"],
-                        "start_side": hunk_line["side"],
-                        "line": nearby_line["line"],
-                        "side": nearby_line["side"],
-                    },
-                    int(nearby_line["position"]),
-                )
-
-        return None
-
-    visible_lines = [
-        hunk_line
-        for hunk_line in hunk_lines
-        if str(hunk_line["content"]).strip()
-    ]
-    if not visible_lines:
-        return None
-
-    nearest_line = min(
-        visible_lines,
-        key=lambda hunk_line: (
-            abs(int(hunk_line["line"]) - target_line),
-            int(hunk_line["line"]),
-        ),
-    )
-    if abs(int(nearest_line["line"]) - target_line) > 2:
-        logger.info(
-            "No exact diff line %s found in hunk and the nearest visible line %s is too far away; skipping inline comment",
-            target_line,
-            nearest_line["line"],
-        )
-        return None
-
-    logger.info(
-        "No exact diff line %s found in hunk; anchoring inline comment to nearest visible line %s",
-        target_line,
-        nearest_line["line"],
-    )
-    return (
-        {
-            "line": nearest_line["line"],
-            "side": nearest_line["side"],
-        },
-        int(nearest_line["position"]),
-    )
 
 
 def _post_github_comments(
@@ -695,7 +515,17 @@ def _post_github_comments(
 ) -> None:
     skipped_inline_comments = 0
     failed_inline_comments = 0
+    verify_only = os.getenv("VERIFY_INLINE_COMMENTS_ONLY", "").lower() == "true"
+    diff_mapper = MultiFileDiffLineMapper.from_files(files)
+    validator = InlineCommentValidator(
+        diff_mapper=diff_mapper,
+        source_commit_sha=commit_sha,
+        current_head_sha=current_head_sha,
+    )
     suggestion_service = SuggestionEligibilityService()
+
+    if os.getenv("INLINE_COMMENT_MAPPING_DEBUG", "").lower() == "true":
+        diff_mapper.log_debug_mapping_tables()
 
     for issue in review.issues:
         if getattr(issue, "github_comment_id", None):
@@ -706,28 +536,30 @@ def _post_github_comments(
             continue
 
         logger.info(
-            "Processing issue: file=%s line=%s category=%s",
-            issue.file,
-            issue.line,
+            "Processing issue: file=%s line=%s line_ref=%s side=%s category=%s",
+            _issue_file_path(issue),
+            getattr(issue, "line", None),
+            getattr(issue, "line_ref", None),
+            getattr(issue, "side", None),
             issue.category,
         )
 
-        if not issue.file or not issue.line:
+        if not _issue_file_path(issue) or (
+            not getattr(issue, "line_ref", None)
+            and not getattr(issue, "line", None)
+            and not getattr(issue, "old_line", None)
+        ):
             logger.warning(
-                "Skipping issue without file/line: file=%s line=%s",
-                issue.file,
-                issue.line,
+                "Skipping issue without file/location: file=%s line=%s line_ref=%s old_line=%s",
+                _issue_file_path(issue),
+                getattr(issue, "line", None),
+                getattr(issue, "line_ref", None),
+                getattr(issue, "old_line", None),
             )
             continue
 
-        anchor_info = _get_diff_anchor_for_issue(
-            files=files,
-            file_path=issue.file,
-            line_number=issue.line,
-        )
-
-        file_entry = _get_file_entry_for_issue(files, issue.file)
-        actual_file_path = file_entry.get("filename") if file_entry else issue.file
+        file_entry = _get_file_entry_for_issue(files, _issue_file_path(issue))
+        actual_file_path = file_entry.get("filename") if file_entry else _issue_file_path(issue)
         suggestion = suggestion_service.evaluate(
             issue=issue,
             all_issues=review.issues,
@@ -743,6 +575,12 @@ def _post_github_comments(
             suggestion_rejection_reason=suggestion.reason,
         )
 
+        validation_result = validator.validate_issue(issue)
+        anchor = validation_result.payload
+
+        if suggestion.eligible and suggestion.anchor:
+            anchor = suggestion.anchor
+
         comment_payload = {
             "repository": repository,
             "pull_request_number": pull_request_number,
@@ -752,34 +590,60 @@ def _post_github_comments(
             "body": comment_body,
         }
 
-        if suggestion.eligible and suggestion.anchor:
-            anchor_info = (suggestion.anchor, None)
-
-        if anchor_info is None:
+        if anchor is None or not validation_result.valid:
             skipped_inline_comments += 1
             logger.warning(
-                "Skipping inline comment for %s:%s because the line could not be mapped to the PR diff",
-                issue.file,
-                issue.line,
+                "Skipping inline comment for %s location=%s because validation failed: %s",
+                _issue_file_path(issue),
+                _issue_location_label(issue),
+                validation_result.reason,
             )
             _post_inline_fallback_comment(
                 repository=repository,
                 pull_request_number=pull_request_number,
                 access_token=access_token,
                 file_path=actual_file_path,
-                line_number=issue.line,
+                location_label=_issue_location_label(issue),
                 body=comment_body,
-                reason="the line could not be mapped to the PR diff",
+                reason=validation_result.reason or "the line could not be mapped to the PR diff",
+                verify_only=verify_only,
             )
             continue
 
-        anchor, _fallback_position = anchor_info
         comment_payload.update(anchor)
+        if validation_result.resolved_line:
+            _apply_resolved_location_to_issue(
+                issue,
+                validation_result.resolved_line,
+                source_commit_sha=commit_sha,
+            )
 
         logger.info(
-            "Posting inline comment payload for %s:%s: %s",
-            issue.file,
-            issue.line,
+            "Inline comment mapping validation result for %s location=%s: "
+            "valid=%s line_ref=%s old_line=%s new_line=%s side=%s patch_index=%s payload=%s",
+            _issue_file_path(issue),
+            _issue_location_label(issue),
+            validation_result.valid,
+            getattr(validation_result.resolved_line, "line_ref", None),
+            validation_result.resolved_line.patch_line.old_line if validation_result.resolved_line else None,
+            validation_result.resolved_line.patch_line.new_line if validation_result.resolved_line else None,
+            anchor.get("side"),
+            validation_result.resolved_line.patch_line.patch_index if validation_result.resolved_line else None,
+            {k: v for k, v in comment_payload.items() if k not in {'access_token', 'body'}},
+        )
+
+        if verify_only:
+            logger.info(
+                "VERIFY_INLINE_COMMENTS_ONLY=true; not posting inline comment for %s location=%s",
+                _issue_file_path(issue),
+                _issue_location_label(issue),
+            )
+            continue
+
+        logger.info(
+            "Posting inline comment payload for %s location=%s: %s",
+            _issue_file_path(issue),
+            _issue_location_label(issue),
             {k: v for k, v in comment_payload.items() if k not in {'access_token', 'body'}},
         )
         try:
@@ -792,16 +656,16 @@ def _post_github_comments(
                 access_token=access_token,
             )
             logger.info(
-                "Posted inline comment for %s:%s anchor=%s",
-                issue.file,
-                issue.line,
+                "Posted inline comment for %s location=%s anchor=%s",
+                _issue_file_path(issue),
+                _issue_location_label(issue),
                 anchor,
             )
         except Exception as exc:
             logger.warning(
-                "Failed to post inline comment for %s:%s with anchor=%s; %s",
-                issue.file,
-                issue.line,
+                "Failed to post inline comment for %s location=%s with anchor=%s; %s",
+                _issue_file_path(issue),
+                _issue_location_label(issue),
                 anchor,
                 exc,
             )
@@ -811,9 +675,10 @@ def _post_github_comments(
                 pull_request_number=pull_request_number,
                 access_token=access_token,
                 file_path=actual_file_path,
-                line_number=issue.line,
+                location_label=_issue_location_label(issue),
                 body=comment_body,
                 reason="GitHub rejected the inline comment",
+                verify_only=verify_only,
             )
 
     summary = format_review_summary(
@@ -821,12 +686,19 @@ def _post_github_comments(
         files_reviewed=files_reviewed,
     )
 
-    post_pr_comment(
-        repository=repository,
-        pull_request_number=pull_request_number,
-        access_token=access_token,
-        body=summary,
-    )
+    if verify_only:
+        logger.info(
+            "VERIFY_INLINE_COMMENTS_ONLY=true; not posting PR summary comment for %s PR #%s",
+            repository,
+            pull_request_number,
+        )
+    else:
+        post_pr_comment(
+            repository=repository,
+            pull_request_number=pull_request_number,
+            access_token=access_token,
+            body=summary,
+        )
     logger.info(
         "Posted general review comment; skipped_inline_comments=%s failed_inline_comments=%s",
         skipped_inline_comments,
@@ -884,6 +756,47 @@ def _attach_github_inline_metadata(
 
     issue.github_review_thread_id = thread.get("id")
     issue.github_comment_node_id = thread.get("comment_node_id") or issue.github_comment_node_id
+
+
+def _issue_file_path(issue) -> str | None:
+    return getattr(issue, "file_path", None) or getattr(issue, "file", None)
+
+
+def _issue_location_label(issue) -> str:
+    if getattr(issue, "line_ref", None):
+        return str(getattr(issue, "line_ref"))
+    side = getattr(issue, "side", None)
+    side_value = side.value if hasattr(side, "value") else side
+    if side_value == "LEFT" and getattr(issue, "old_line", None):
+        return f"OLD:{getattr(issue, 'old_line')}"
+    if getattr(issue, "old_line", None) and not getattr(issue, "line", None):
+        return f"OLD:{getattr(issue, 'old_line')}"
+    if getattr(issue, "line", None):
+        return str(getattr(issue, "line"))
+    return "unknown location"
+
+
+def _apply_resolved_location_to_issue(issue, resolved_line, source_commit_sha: str) -> None:
+    patch_line = resolved_line.patch_line
+    if hasattr(issue, "file"):
+        issue.file = resolved_line.file_path
+    if hasattr(issue, "file_path"):
+        issue.file_path = resolved_line.file_path
+    if hasattr(issue, "line_ref") and not getattr(issue, "line_ref", None):
+        issue.line_ref = resolved_line.line_ref
+    if hasattr(issue, "side"):
+        issue.side = resolved_line.side.value
+    if hasattr(issue, "old_line"):
+        issue.old_line = patch_line.old_line
+    if hasattr(issue, "diff_hunk"):
+        issue.diff_hunk = patch_line.hunk_header
+    if hasattr(issue, "source_commit_sha") and not getattr(issue, "source_commit_sha", None):
+        issue.source_commit_sha = source_commit_sha
+
+    if resolved_line.side.value == "LEFT":
+        issue.line = None
+    else:
+        issue.line = patch_line.new_line
 
 
 def _enum_value(value) -> str:
@@ -988,20 +901,31 @@ def _post_inline_fallback_comment(
     pull_request_number: int,
     access_token: str,
     file_path: str,
-    line_number: int,
+    location_label: str,
     body: str,
     reason: str,
+    verify_only: bool = False,
 ) -> None:
+    fallback_body = (
+        "**AI Review Finding**\n\n"
+        f"`{file_path}:{location_label}`\n\n"
+        f"{body}\n\n"
+        f"_Inline comment unavailable: {reason}._"
+    )
+    if verify_only:
+        logger.info(
+            "VERIFY_INLINE_COMMENTS_ONLY=true; not posting fallback PR comment for %s:%s reason=%s",
+            file_path,
+            location_label,
+            reason,
+        )
+        return
+
     post_pr_comment(
         repository=repository,
         pull_request_number=pull_request_number,
         access_token=access_token,
-        body=(
-            "**AI Review Finding**\n\n"
-            f"`{file_path}:{line_number}`\n\n"
-            f"{body}\n\n"
-            f"_Inline comment unavailable: {reason}._"
-        ),
+        body=fallback_body,
     )
 
 

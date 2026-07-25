@@ -176,17 +176,6 @@ class SuggestionEligibilityService:
             patch = file.get("patch") or ""
             return _right_side_lines_from_patch(patch)
 
-        for file in files:
-            candidate_path = _normalize_path(file.get("filename"))
-            if not (
-                candidate_path.endswith(normalized_file_path)
-                or normalized_file_path.endswith(candidate_path)
-            ):
-                continue
-
-            patch = file.get("patch") or ""
-            return _right_side_lines_from_patch(patch)
-
         return set()
 
     def _anchor_for_edit(self, edit: PatchEdit) -> dict[str, int | str]:

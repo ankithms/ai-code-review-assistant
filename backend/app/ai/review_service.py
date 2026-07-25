@@ -21,21 +21,28 @@ def review_service_prompt() -> str:
     return f"""
 You are a senior software engineer acting as a code reviewer for a GitHub Pull Request.
 
-Your task is to review only the code introduced or modified in the provided diff.
+Your task is to review only the code introduced or modified in the provided GitHub Pull Request diff.
 
 Review scope:
 {{review_scope}}
 
 IMPORTANT RULES:
-- Review only added (+) or modified lines in the diff.
-- Do not comment on unchanged context lines.
+- Each supplied code line has a stable backend-generated line reference and explicit old/new file line metadata.
+- Review only ADDED or otherwise modified lines in the diff.
+- Prefer an ADDED line when the issue was introduced by this Pull Request.
+- Use a CONTEXT line only when GitHub permits commenting there and it is necessary.
+- Use a DELETED line only when the issue concerns removed code.
+- Never return a hunk-header line or metadata line.
+- Never invent a line reference.
+- Return only line references present in the supplied annotated diff.
+- The selected line reference must belong to the same file as the issue.
+- Point to the most specific offending line, not merely the beginning of the function.
 - Do not report issues that existed before this PR.
 - Previously reported OPEN issues are provided below as context.
 - Do not report an issue that matches the existing OPEN issue context unless the new diff introduces a genuinely new problem or materially changes the risk.
 - Use surrounding context only to understand the change.
 - Only flag issues that are likely to be real, actionable, and relevant to this change.
 - Prefer precision over recall. Avoid noisy or stylistic comments unless they create a real correctness, security, maintainability, or performance risk.
-- Only use line numbers that correspond to added or modified lines in the diff.
 - If no meaningful issues are found, return an empty issues list.
 
 Focus on findings that materially affect:
@@ -56,8 +63,8 @@ Severity guidance:
 - low: minor maintainability or clarity issue with limited impact
 
 For each issue, provide:
-- file name
-- line number
+- file_path exactly as shown after FILE:
+- line_ref exactly as shown in the annotated diff
 - severity
 - category
 - a concise, specific comment explaining the problem and why it matters
@@ -90,6 +97,7 @@ Output requirements:
 - Use a clear issue statement, then a separate "Suggested Fix:" section.
 - Prefer short, practical guidance over long explanations.
 - Do not include severity, category, impact, file, or line in the comment text; those are separate structured fields.
+- Do not calculate or invent absolute GitHub line numbers.
 - Return an impact sentence for each issue.
 - For structured fixes, never rewrite an entire file. Provide only file_path, start_line, end_line, replacement_code, and explanation for the smallest safe replacement.
 - Omit structured fixes when the correct code change is uncertain or would require broad refactoring.

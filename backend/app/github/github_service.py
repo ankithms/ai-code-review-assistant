@@ -283,7 +283,6 @@ def post_inline_comment(
     commit_id,
     file_path,
     line=None,
-    position=None,
     side=None,
     start_line=None,
     start_side=None,
@@ -295,9 +294,7 @@ def post_inline_comment(
         "path": file_path,
     }
 
-    if position is not None:
-        payload["position"] = position
-    elif line is not None:
+    if line is not None:
         payload["line"] = line
         if side is not None:
             payload["side"] = side

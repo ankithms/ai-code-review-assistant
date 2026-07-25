@@ -11,6 +11,14 @@ class IssueResponse(BaseModel):
     severity: str
     category: str
     file: str | None = None
+    line: int | None = None
+    line_ref: str | None = None
+    side: str | None = None
+    start_line: int | None = None
+    start_side: str | None = None
+    old_line: int | None = None
+    diff_hunk: str | None = None
+    source_commit_sha: str | None = None
     comment: str
     status: IssueStatus
     resolved_at: datetime | None = None

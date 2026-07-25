@@ -14,6 +14,275 @@ from app.services import review_processing_service
 
 
 class GithubCommentPostingTests(unittest.TestCase):
+    def test_posts_line_ref_issue_on_added_line_with_right_side(self):
+        review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file_path="src/app.py",
+                    file="src/app.py",
+                    line_ref="L2",
+                    line=None,
+                    severity=SeverityEnum.high,
+                    category=CategoryEnum.bug,
+                    comment="This line can fail.",
+                )
+            ],
+            summary="Review summary",
+        )
+        files = [
+            {
+                "filename": "src/app.py",
+                "patch": "@@ -1,2 +1,3 @@\n unchanged\n+new line\n tail",
+            }
+        ]
+
+        with (
+            patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
+            patch.object(review_processing_service, "post_pr_comment") as post_pr_comment,
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=1,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="abc123",
+                current_head_sha="abc123",
+                access_token="token",
+            )
+
+        inline_kwargs = post_inline_comment.call_args.kwargs
+        self.assertEqual(inline_kwargs["line"], 2)
+        self.assertEqual(inline_kwargs["side"], "RIGHT")
+        self.assertNotIn("position", inline_kwargs)
+        post_pr_comment.assert_called_once()
+
+    def test_posts_line_ref_issue_on_deleted_line_with_left_side(self):
+        review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file_path="src/app.py",
+                    file="src/app.py",
+                    line_ref="L2",
+                    line=None,
+                    severity=SeverityEnum.medium,
+                    category=CategoryEnum.bug,
+                    comment="This deleted line matters.",
+                )
+            ],
+            summary="Review summary",
+        )
+        files = [
+            {
+                "filename": "src/app.py",
+                "status": "modified",
+                "patch": "@@ -8,2 +8,1 @@\n keep\n-remove_me()",
+            }
+        ]
+
+        with (
+            patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
+            patch.object(review_processing_service, "post_pr_comment"),
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=1,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="abc123",
+                current_head_sha="abc123",
+                access_token="token",
+            )
+
+        inline_kwargs = post_inline_comment.call_args.kwargs
+        self.assertEqual(inline_kwargs["line"], 9)
+        self.assertEqual(inline_kwargs["side"], "LEFT")
+        self.assertNotIn("position", inline_kwargs)
+
+    def test_invalid_line_ref_is_rejected(self):
+        review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file_path="src/app.py",
+                    file="src/app.py",
+                    line_ref="L99",
+                    line=None,
+                    severity=SeverityEnum.high,
+                    category=CategoryEnum.bug,
+                    comment="This line can fail.",
+                )
+            ],
+            summary="Review summary",
+        )
+        files = [{"filename": "src/app.py", "patch": "@@ -1 +1 @@\n+new line"}]
+
+        with (
+            patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
+            patch.object(review_processing_service, "post_pr_comment") as post_pr_comment,
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=1,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="abc123",
+                current_head_sha="abc123",
+                access_token="token",
+            )
+
+        post_inline_comment.assert_not_called()
+        fallback_body = post_pr_comment.call_args_list[0].kwargs["body"]
+        self.assertIn("line reference does not exist", fallback_body)
+
+    def test_hunk_header_reference_is_rejected(self):
+        review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file_path="src/app.py",
+                    file="src/app.py",
+                    line_ref="@@ -1 +1 @@",
+                    line=None,
+                    severity=SeverityEnum.high,
+                    category=CategoryEnum.bug,
+                    comment="This line can fail.",
+                )
+            ],
+            summary="Review summary",
+        )
+        files = [{"filename": "src/app.py", "patch": "@@ -1 +1 @@\n+new line"}]
+
+        with (
+            patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
+            patch.object(review_processing_service, "post_pr_comment") as post_pr_comment,
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=1,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="abc123",
+                current_head_sha="abc123",
+                access_token="token",
+            )
+
+        post_inline_comment.assert_not_called()
+        fallback_body = post_pr_comment.call_args_list[0].kwargs["body"]
+        self.assertIn("line reference does not exist", fallback_body)
+
+    def test_multiple_files_do_not_share_line_refs(self):
+        review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file_path="b.py",
+                    file="b.py",
+                    line_ref="L1",
+                    line=None,
+                    severity=SeverityEnum.high,
+                    category=CategoryEnum.bug,
+                    comment="This line can fail.",
+                )
+            ],
+            summary="Review summary",
+        )
+        files = [
+            {"filename": "a.py", "patch": "@@ -10 +10 @@\n+first"},
+            {"filename": "b.py", "patch": "@@ -50 +50 @@\n+second"},
+        ]
+
+        with (
+            patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
+            patch.object(review_processing_service, "post_pr_comment"),
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=2,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="abc123",
+                current_head_sha="abc123",
+                access_token="token",
+            )
+
+        self.assertEqual(post_inline_comment.call_args.kwargs["file_path"], "b.py")
+        self.assertEqual(post_inline_comment.call_args.kwargs["line"], 50)
+
+    def test_stale_commit_sha_prevents_posting(self):
+        review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file_path="src/app.py",
+                    file="src/app.py",
+                    line_ref="L1",
+                    line=None,
+                    severity=SeverityEnum.high,
+                    category=CategoryEnum.bug,
+                    comment="This line can fail.",
+                )
+            ],
+            summary="Review summary",
+        )
+        files = [{"filename": "src/app.py", "patch": "@@ -1 +1 @@\n+new line"}]
+
+        with (
+            patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
+            patch.object(review_processing_service, "post_pr_comment") as post_pr_comment,
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=1,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="oldsha",
+                current_head_sha="newsha",
+                access_token="token",
+            )
+
+        post_inline_comment.assert_not_called()
+        fallback_body = post_pr_comment.call_args_list[0].kwargs["body"]
+        self.assertIn("current PR HEAD", fallback_body)
+
+    def test_verification_mode_builds_payload_without_posting(self):
+        review = SimpleNamespace(
+            issues=[
+                SimpleNamespace(
+                    file_path="src/app.py",
+                    file="src/app.py",
+                    line_ref="L1",
+                    line=None,
+                    severity=SeverityEnum.high,
+                    category=CategoryEnum.bug,
+                    comment="This line can fail.",
+                )
+            ],
+            summary="Review summary",
+        )
+        files = [{"filename": "src/app.py", "patch": "@@ -1 +1 @@\n+new line"}]
+
+        with (
+            patch.dict(os.environ, {"VERIFY_INLINE_COMMENTS_ONLY": "true"}),
+            patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
+            patch.object(review_processing_service, "post_pr_comment") as post_pr_comment,
+        ):
+            review_processing_service._post_github_comments(
+                review=review,
+                files=files,
+                files_reviewed=1,
+                repository="owner/repo",
+                pull_request_number=12,
+                commit_sha="abc123",
+                current_head_sha="abc123",
+                access_token="token",
+            )
+
+        post_inline_comment.assert_not_called()
+        post_pr_comment.assert_not_called()
+        self.assertEqual(review.issues[0].line, 1)
+
     def test_posts_inline_comment_using_pr_file_diff(self):
         review = SimpleNamespace(
             issues=[
@@ -363,7 +632,7 @@ class GithubCommentPostingTests(unittest.TestCase):
         self.assertIn("src/app.py:2", review_code.call_args.kwargs["existing_issues_context"])
         self.assertIn("Dereferencing a nullable user", review_code.call_args.kwargs["existing_issues_context"])
         self.assertIn("query = f", review_code.call_args.args[0])
-        self.assertNotIn("src/old.py", review_code.call_args.args[0])
+        self.assertIn("src/old.py", review_code.call_args.args[0])
         self.assertNotIn("assets/logo.png", review_code.call_args.args[0])
         post_github_comments.assert_called_once()
         self.assertEqual(save_review.call_args.kwargs["review_data"].issues, [new_issue])
@@ -431,7 +700,7 @@ class GithubCommentPostingTests(unittest.TestCase):
                 review_processing_service,
                 "get_compare_files",
                 return_value=[
-                    {"filename": "src/old.py", "status": "removed", "patch": "@@ -1 +0,0 @@\n-old = True"},
+                    {"filename": "src/old.py", "status": "removed"},
                     {"filename": "assets/logo.png", "status": "modified"},
                 ],
             ),
@@ -773,7 +1042,7 @@ class GithubCommentPostingTests(unittest.TestCase):
         self.assertEqual(inline_kwargs["line"], 8)
         self.assertEqual(inline_kwargs["side"], "RIGHT")
 
-    def test_blank_line_issue_anchors_to_nearby_code_line(self):
+    def test_blank_line_issue_posts_to_exact_blank_line(self):
         review = SimpleNamespace(
             issues=[
                 SimpleNamespace(
@@ -808,12 +1077,10 @@ class GithubCommentPostingTests(unittest.TestCase):
             )
 
         inline_kwargs = post_inline_comment.call_args.kwargs
-        self.assertEqual(inline_kwargs["start_line"], 8)
-        self.assertEqual(inline_kwargs["start_side"], "RIGHT")
         self.assertEqual(inline_kwargs["line"], 9)
         self.assertEqual(inline_kwargs["side"], "RIGHT")
 
-    def test_issue_line_near_hunk_anchors_to_nearest_visible_code_line(self):
+    def test_issue_line_near_hunk_falls_back_instead_of_guessing(self):
         review = SimpleNamespace(
             issues=[
                 SimpleNamespace(
@@ -835,7 +1102,7 @@ class GithubCommentPostingTests(unittest.TestCase):
 
         with (
             patch.object(review_processing_service, "post_inline_comment") as post_inline_comment,
-            patch.object(review_processing_service, "post_pr_comment"),
+            patch.object(review_processing_service, "post_pr_comment") as post_pr_comment,
         ):
             review_processing_service._post_github_comments(
                 review=review,
@@ -847,9 +1114,9 @@ class GithubCommentPostingTests(unittest.TestCase):
                 access_token="token",
             )
 
-        inline_kwargs = post_inline_comment.call_args.kwargs
-        self.assertEqual(inline_kwargs["line"], 2)
-        self.assertEqual(inline_kwargs["side"], "RIGHT")
+        post_inline_comment.assert_not_called()
+        fallback_body = post_pr_comment.call_args_list[0].kwargs["body"]
+        self.assertIn("Inline comment unavailable", fallback_body)
 
     def test_inline_comment_failure_does_not_retry_with_diff_position(self):
         review = SimpleNamespace(
