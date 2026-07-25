@@ -74,6 +74,11 @@ export default function Dashboard() {
   const { selectedRepository, selectedRepositoryId, loading } = useRepository();
   const [analyticsState, setAnalyticsState] =
     useState<{ repositoryId: number; data: Analytics } | null>(null);
+  const [refreshState, setRefreshState] =
+    useState<{
+      repositoryId: number;
+      status: "refreshing" | "success" | "error";
+    } | null>(null);
 
   useEffect(() => {
     if (selectedRepositoryId === null) {
@@ -101,6 +106,36 @@ export default function Dashboard() {
       ignore = true;
     };
   }, [selectedRepositoryId]);
+
+  const refreshAnalytics = async () => {
+    if (selectedRepositoryId === null) {
+      return;
+    }
+
+    const repositoryId = selectedRepositoryId;
+    setRefreshState({
+      repositoryId,
+      status: "refreshing",
+    });
+
+    try {
+      const res = await api.post(`/repositories/${repositoryId}/analytics/sync`);
+      setAnalyticsState({
+        repositoryId,
+        data: res.data,
+      });
+      setRefreshState({
+        repositoryId,
+        status: "success",
+      });
+    } catch (err) {
+      console.error(err);
+      setRefreshState({
+        repositoryId,
+        status: "error",
+      });
+    }
+  };
 
   if (loading) {
     return (
@@ -130,6 +165,10 @@ export default function Dashboard() {
   }
 
   const analytics = analyticsState.data;
+  const refreshStatus =
+    refreshState?.repositoryId === selectedRepositoryId
+      ? refreshState.status
+      : "idle";
   const reviewTime =
     analytics.average_review_processing_time_seconds === null
       ? "N/A"
@@ -147,6 +186,27 @@ export default function Dashboard() {
           <span className="selected-repository">
             {selectedRepository.full_name}
           </span>
+        </div>
+
+        <div className="dashboard-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={refreshStatus === "refreshing"}
+            onClick={refreshAnalytics}
+          >
+            {refreshStatus === "refreshing"
+              ? "Refreshing..."
+              : "Refresh statuses"}
+          </button>
+
+          {refreshStatus === "success" && (
+            <span className="action-status action-status--success">Updated</span>
+          )}
+
+          {refreshStatus === "error" && (
+            <span className="action-status action-status--error">Refresh failed</span>
+          )}
         </div>
       </header>
 

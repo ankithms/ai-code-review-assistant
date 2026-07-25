@@ -208,6 +208,27 @@ button {
   font-weight: 750;
 }
 
+.dashboard-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 190px;
+}
+
+.action-status {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.action-status--success {
+  color: var(--success);
+}
+
+.action-status--error {
+  color: var(--danger);
+}
+
 .grid {
   display: grid;
   gap: 18px;
@@ -786,6 +807,12 @@ button {
 
   .repository-selector {
     width: 100%;
+  }
+
+  .dashboard-actions {
+    align-items: flex-start;
+    justify-content: flex-start;
+    min-width: 0;
   }
 
   .nav-links {
