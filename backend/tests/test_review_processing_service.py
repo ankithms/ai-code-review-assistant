@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
-from app.db.models import Base, PullRequest, Repository
+from app.db.models import Base, FixCommit, Issue, PullRequest, Repository, Review
 from app.ai.review_service import AIReviewServiceError
-from app.schemas.output import CategoryEnum, SeverityEnum
+from app.schemas.output import CategoryEnum, IssueFixStatus, IssueStatus, SeverityEnum
 from app.services import review_processing_service
 
 
@@ -1309,6 +1309,92 @@ class GithubCommentPostingTests(unittest.TestCase):
         fallback_body = post_pr_comment.call_args_list[0].kwargs["body"]
         self.assertIn("`src/app.py:2`", fallback_body)
         self.assertIn("GitHub rejected the inline comment", fallback_body)
+
+
+class DirectFixReconciliationTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.session = Session(self.engine)
+        repository = Repository(full_name="owner/repo")
+        pull_request = PullRequest(
+            repository_ref=repository,
+            github_pr_id=99,
+            pull_request_number=12,
+            title="PR",
+            repository="owner/repo",
+            author="octocat",
+        )
+        review = Review(pull_request=pull_request, summary="summary", commit_sha="old-head")
+        self.fixed_issue = Issue(
+            review=review,
+            severity="high",
+            category="bug",
+            file="app.py",
+            line=4,
+            comment="Dereferencing a nullable user can crash the request.",
+            impact="The request fails.",
+            status=IssueStatus.OPEN.value,
+            fix_status=IssueFixStatus.FIX_COMMITTED.value,
+        )
+        fix_commit = FixCommit(
+            review=review,
+            pull_request=pull_request,
+            github_commit_sha="ai-fix-sha",
+            github_commit_url="https://github.com/owner/repo/commit/ai-fix-sha",
+            commit_message="fix(ai): resolve nullable user issue",
+            source_head_sha="old-head",
+            branch_name="feature",
+            status="SUCCESS",
+            mode="DIRECT",
+            validation_status="PASSED",
+            applied_issue_ids="[]",
+            issues=[self.fixed_issue],
+        )
+        self.session.add_all([repository, pull_request, review, self.fixed_issue, fix_commit])
+        self.session.commit()
+        self.pull_request = pull_request
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_missing_issue_after_synchronize_is_marked_resolved(self):
+        resolved = review_processing_service._reconcile_direct_fix_commit_issues(
+            db=self.session,
+            pull_request_id=self.pull_request.id,
+            commit_sha="ai-fix-sha",
+            new_issues=[],
+        )
+        self.session.commit()
+        self.session.refresh(self.fixed_issue)
+
+        self.assertEqual(resolved, 1)
+        self.assertEqual(self.fixed_issue.status, IssueStatus.RESOLVED.value)
+        self.assertEqual(self.fixed_issue.resolved_by, "AI Fix Commit ai-fix-")
+
+    def test_recurring_issue_remains_open_and_is_not_duplicated(self):
+        recurring_issue = SimpleNamespace(
+            file="app.py",
+            line=5,
+            category="bug",
+            comment="Dereferencing a nullable user can crash the request.",
+            impact="The request fails.",
+        )
+        resolved = review_processing_service._reconcile_direct_fix_commit_issues(
+            db=self.session,
+            pull_request_id=self.pull_request.id,
+            commit_sha="ai-fix-sha",
+            new_issues=[recurring_issue],
+        )
+
+        self.assertEqual(resolved, 0)
+        self.assertEqual(self.fixed_issue.status, IssueStatus.OPEN.value)
+        self.assertEqual(
+            review_processing_service._filter_duplicate_issues(
+                [recurring_issue], [self.fixed_issue]
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

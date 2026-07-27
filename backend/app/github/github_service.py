@@ -1,4 +1,5 @@
 import base64
+from urllib.parse import quote
 
 import requests
 
@@ -33,6 +34,27 @@ def get_pull_request(
     )
     response.raise_for_status()
 
+    return response.json()
+
+
+def get_repository(repository, access_token):
+    response = requests.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}",
+        headers=_headers(access_token),
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_branch(repository, branch_name, access_token):
+    encoded_branch_name = quote(branch_name, safe="")
+    response = requests.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository}/branches/{encoded_branch_name}",
+        headers=_headers(access_token),
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
     return response.json()
 
 
@@ -125,21 +147,6 @@ def get_ref(repository, branch_name, access_token):
     return response.json()
 
 
-def create_ref(repository, branch_name, sha, access_token):
-    response = requests.post(
-        f"{GITHUB_API_BASE_URL}/repos/{repository}/git/refs",
-        headers=_headers(access_token),
-        json={
-            "ref": f"refs/heads/{branch_name}",
-            "sha": sha,
-        },
-        timeout=TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-
-    return response.json()
-
-
 def update_ref(repository, branch_name, sha, access_token, force=False):
     response = requests.patch(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/git/refs/heads/{branch_name}",
@@ -204,30 +211,6 @@ def create_commit(repository, message, tree_sha, parent_sha, access_token):
             "message": message,
             "tree": tree_sha,
             "parents": [parent_sha],
-        },
-        timeout=TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-
-    return response.json()
-
-
-def create_pull_request(
-    repository,
-    head_branch,
-    base_branch,
-    title,
-    body,
-    access_token,
-):
-    response = requests.post(
-        f"{GITHUB_API_BASE_URL}/repos/{repository}/pulls",
-        headers=_headers(access_token),
-        json={
-            "head": head_branch,
-            "base": base_branch,
-            "title": title,
-            "body": body,
         },
         timeout=TIMEOUT_SECONDS,
     )

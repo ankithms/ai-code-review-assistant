@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
+    FixCommit,
     FixPullRequest,
     PullRequest,
     Review,
@@ -121,7 +122,9 @@ def get_review_by_id_for_repository(
         .join(PullRequest)
         .options(
             joinedload(Review.issues).joinedload(Issue.fix_pull_requests),
+            joinedload(Review.issues).joinedload(Issue.fix_commits),
             joinedload(Review.fix_pull_requests).joinedload(FixPullRequest.issues),
+            joinedload(Review.fix_commits).joinedload(FixCommit.issues),
             joinedload(Review.pull_request),
         )
         .filter(

@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, computed_field
 
 from app.schemas.output import IssueStatus
-from app.schemas.fixes import FixPullRequestResponse, IssueFixResponse
+from app.schemas.fixes import FixCommitResponse, FixPullRequestResponse, IssueFixResponse
 
 
 class IssueResponse(BaseModel):
@@ -66,6 +66,7 @@ class ReviewDetailResponse(BaseModel):
     summary: str
     issues: list[IssueResponse]
     fix_pull_requests: list[FixPullRequestResponse]
+    fix_commits: list[FixCommitResponse]
 
     model_config = {
         "from_attributes": True

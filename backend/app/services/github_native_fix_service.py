@@ -6,16 +6,17 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session, joinedload
 
 from app.ai.review_service import AIReviewServiceError
-from app.db.models import FixCommit, FixPullRequest, Issue, PullRequest, Repository, Review
+from app.db.models import FixCommit, Issue, PullRequest, Repository, Review
 from app.github.github_service import post_pr_comment, reply_to_review_comment
 from app.repositories.review_repository import get_latest_review_for_pull_request
 from app.routes.fixes import (
+    _build_commit_message,
     _build_preview_response,
     _github_pull_request,
     _preview_file_to_patched_file,
     _validate_issues_eligible_for_fix,
 )
-from app.schemas.output import FixPullRequestStatus, IssueFixStatus
+from app.schemas.output import IssueFixStatus
 from app.services.fix_generation_service import FixGenerationService
 from app.services.git_commit_service import GitCommitService
 
@@ -156,6 +157,11 @@ def _run_fix_command(
 
     _validate_issues_eligible_for_fix(issues)
     pull_request = _github_pull_request(db, review, access_token)
+    GitCommitService().validate_direct_commit_target(
+        repository=repository,
+        pull_request=pull_request,
+        access_token=access_token,
+    )
     target_head_sha = pull_request["head"]["sha"]
 
     FixGenerationService().generate_fixes(
@@ -165,6 +171,7 @@ def _run_fix_command(
         target_ref=target_head_sha,
         target_head_sha=target_head_sha,
         access_token=access_token,
+        pull_request=pull_request,
     )
 
     preview = _build_preview_response(
@@ -175,24 +182,35 @@ def _run_fix_command(
     )
     if not preview.valid:
         errors = "\n".join(f"- {error}" for error in preview.errors)
-        raise ValueError(f"Fix preview validation failed. No Fix PR was created.\n\n{errors}")
+        raise ValueError(f"Fix preview validation failed. No commit was created.\n\n{errors}")
+
+    included_ids = set(preview.included_issue_ids)
+    included_issues = [issue for issue in issues if issue.id in included_ids]
+    if not included_issues:
+        raise ValueError("No selected fix passed validation. No commit was created.")
 
     commenter = ((payload.get("comment") or {}).get("user") or {}).get("login")
+    commit_message = _build_commit_message(included_issues)
     fix_commit = FixCommit(
         review_id=review.id,
         pull_request_id=review.pull_request.id,
         status="PENDING",
-        applied_issue_ids=json.dumps([issue.id for issue in issues]),
-        mode="BRANCH_PR",
-        created_by=commenter,
+        applied_issue_ids=json.dumps([issue.id for issue in included_issues]),
+        mode="DIRECT",
+        created_by=commenter or "AI Code Review Assistant",
+        source_head_sha=preview.target_head_sha,
+        commit_message=commit_message,
+        validation_status="PASSED",
+        issues=included_issues,
     )
     db.add(fix_commit)
-    db.flush()
+    db.commit()
+    db.refresh(fix_commit)
 
     try:
         result = GitCommitService().create_fix_commit(
             repository=repository,
-            base_branch=preview.target_branch,
+            pull_request=pull_request,
             expected_head_sha=preview.target_head_sha,
             patched_files=[
                 _preview_file_to_patched_file(file)
@@ -200,8 +218,7 @@ def _run_fix_command(
                 if file.valid and file.patched_content is not None
             ],
             access_token=access_token,
-            pull_request_number=pull_request_number,
-            mode="BRANCH_PR",
+            commit_message=commit_message,
         )
     except Exception as exc:
         fix_commit.status = "FAILED"
@@ -211,35 +228,21 @@ def _run_fix_command(
 
     fix_commit.status = "SUCCESS"
     fix_commit.github_commit_sha = result.commit_sha
+    fix_commit.github_commit_url = result.commit_url
     fix_commit.branch_name = result.branch_name
-    fix_commit.pull_request_url = result.pull_request_url
+    fix_commit.pull_request_url = pull_request.get("html_url")
 
-    fix_pull_request = FixPullRequest(
-        repository_id=review.pull_request.repository_id,
-        review_id=review.id,
-        original_pull_request_id=review.pull_request.id,
-        original_pr_number=pull_request_number,
-        source_commit_sha=preview.target_head_sha,
-        fix_branch=result.branch_name,
-        github_pr_number=result.pull_request_number,
-        github_pr_url=result.pull_request_url,
-        github_commit_sha=result.commit_sha,
-        github_commit_url=result.commit_url,
-        status=FixPullRequestStatus.PR_CREATED.value,
-        issues=issues,
-    )
-    db.add(fix_pull_request)
-
-    for issue in issues:
-        issue.fix_status = IssueFixStatus.FIX_PR_CREATED.value
+    for issue in included_issues:
+        issue.fix_status = IssueFixStatus.FIX_COMMITTED.value
         db.add(issue)
 
     db.commit()
 
     return (
-        "**AI Fix PR created**\n\n"
-        f"Created Fix PR: {result.pull_request_url}\n\n"
-        f"Included issues: {', '.join(f'#{issue.id}' for issue in issues)}"
+        "**AI fixes committed to this Pull Request**\n\n"
+        f"Commit: [{result.commit_sha[:7]}]({result.commit_url})\n\n"
+        f"Message: `{commit_message.splitlines()[0]}`\n\n"
+        f"Included issues: {', '.join(f'#{issue.id}' for issue in included_issues)}"
     )
 
 

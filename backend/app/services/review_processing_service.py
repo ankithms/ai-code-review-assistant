@@ -1,11 +1,14 @@
+import json
 import logging
 import os
 import re
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.ai.review_service import AIReviewServiceError, review_code
 from app.db.database import SessionLocal
-from app.db.models import PullRequest, Review
+from app.db.models import FixCommit, Issue, PullRequest, Review
+from app.schemas.output import IssueFixStatus, IssueStatus
 from app.github.github_service import (
     get_review_thread_for_comment,
     get_compare_files,
@@ -165,6 +168,12 @@ def _process_pull_request_review(db, job) -> None:
             "Skipping AI review for job %s because there are no reviewable changed files",
             job.id,
         )
+        _reconcile_direct_fix_commit_issues(
+            db=db,
+            pull_request_id=_persisted_id(pull_request_record),
+            commit_sha=job.commit_sha,
+            new_issues=[],
+        )
         save_review(
             db=db,
             pr_data=pr_schema,
@@ -226,6 +235,13 @@ def _process_pull_request_review(db, job) -> None:
         "AI review for job %s returned %s issues",
         job.id,
         len(ai_review.issues),
+    )
+
+    _reconcile_direct_fix_commit_issues(
+        db=db,
+        pull_request_id=_persisted_id(pull_request_record),
+        commit_sha=job.commit_sha,
+        new_issues=ai_review.issues,
     )
 
     previous_review = get_latest_review_for_pull_request(
@@ -375,6 +391,8 @@ def _combine_previous_issue_context(previous_issues, open_issues):
     seen_issue_ids = set()
 
     for issue in [*previous_issues, *open_issues]:
+        if getattr(issue, "status", None) not in {None, IssueStatus.OPEN.value}:
+            continue
         issue_id = getattr(issue, "id", None)
         if issue_id is not None:
             if issue_id in seen_issue_ids:
@@ -384,6 +402,60 @@ def _combine_previous_issue_context(previous_issues, open_issues):
         combined_issues.append(issue)
 
     return combined_issues
+
+
+def _reconcile_direct_fix_commit_issues(
+    db,
+    pull_request_id: int | None,
+    commit_sha: str,
+    new_issues,
+) -> int:
+    if pull_request_id is None:
+        return 0
+
+    fix_commit = (
+        db.query(FixCommit)
+        .filter(
+            FixCommit.pull_request_id == pull_request_id,
+            FixCommit.github_commit_sha == commit_sha,
+            FixCommit.status == "SUCCESS",
+        )
+        .order_by(FixCommit.id.desc())
+        .first()
+    )
+    if fix_commit is None:
+        return 0
+
+    issues = list(fix_commit.issues)
+    if not issues:
+        try:
+            issue_ids = json.loads(fix_commit.applied_issue_ids)
+        except (TypeError, json.JSONDecodeError):
+            issue_ids = []
+        if issue_ids:
+            issues = db.query(Issue).filter(Issue.id.in_(issue_ids)).all()
+
+    resolved_count = 0
+    now = datetime.now(UTC)
+    for issue in issues:
+        issue.fix_status = IssueFixStatus.FIX_COMMITTED.value
+        if any(_issues_match(new_issue, issue) for new_issue in new_issues):
+            issue.status = IssueStatus.OPEN.value
+            issue.resolved_at = None
+            issue.resolved_by = None
+        else:
+            issue.status = IssueStatus.RESOLVED.value
+            issue.resolved_at = issue.resolved_at or now
+            issue.resolved_by = f"AI Fix Commit {commit_sha[:7]}"
+            resolved_count += 1
+        db.add(issue)
+
+    return resolved_count
+
+
+def _persisted_id(record) -> int | None:
+    record_id = getattr(record, "id", None)
+    return record_id if isinstance(record_id, int) else None
 
 
 def _review_with_issues(review, issues):

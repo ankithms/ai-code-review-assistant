@@ -24,6 +24,13 @@ fix_pull_request_issues = Table(
     Column("issue_id", ForeignKey("issues.id"), primary_key=True),
 )
 
+fix_commit_issues = Table(
+    "fix_commit_issues",
+    Base.metadata,
+    Column("fix_commit_id", ForeignKey("fix_commits.id"), primary_key=True),
+    Column("issue_id", ForeignKey("issues.id"), primary_key=True),
+)
+
 
 class PullRequest(Base):
     __tablename__ = "pull_requests"
@@ -52,6 +59,11 @@ class PullRequest(Base):
     fix_pull_requests = relationship(
         "FixPullRequest",
         back_populates="original_pull_request",
+    )
+
+    fix_commits = relationship(
+        "FixCommit",
+        back_populates="pull_request",
     )
 
 
@@ -97,6 +109,11 @@ class Review(Base):
 
     fix_pull_requests = relationship(
         "FixPullRequest",
+        back_populates="review",
+    )
+
+    fix_commits = relationship(
+        "FixCommit",
         back_populates="review",
     )
 
@@ -162,6 +179,12 @@ class Issue(Base):
         back_populates="issues",
     )
 
+    fix_commits = relationship(
+        "FixCommit",
+        secondary=fix_commit_issues,
+        back_populates="issues",
+    )
+
     @property
     def blocking_fix_pull_request(self):
         blocking_statuses = {
@@ -192,10 +215,24 @@ class Issue(Base):
         )[0]
 
     @property
+    def latest_fix_commit(self):
+        successful_commits = [
+            fix_commit
+            for fix_commit in self.fix_commits
+            if fix_commit.status == "SUCCESS"
+        ]
+        return sorted(
+            successful_commits,
+            key=lambda fix_commit: fix_commit.created_at or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )[0] if successful_commits else None
+
+    @property
     def eligible_for_fix(self):
         return (
             self.status == IssueStatus.OPEN.value
             and self.blocking_fix_pull_request is None
+            and self.fix_status != IssueFixStatus.FIX_COMMITTED.value
         )
 
     @property
@@ -210,21 +247,33 @@ class Issue(Base):
 
     @property
     def fix_commit_sha(self):
+        fix_commit = self.latest_fix_commit
+        if fix_commit:
+            return fix_commit.github_commit_sha
         fix_pull_request = self.latest_fix_pull_request
         return fix_pull_request.github_commit_sha if fix_pull_request else None
 
     @property
     def fix_commit_url(self):
+        fix_commit = self.latest_fix_commit
+        if fix_commit:
+            return fix_commit.github_commit_url
         fix_pull_request = self.latest_fix_pull_request
         return fix_pull_request.github_commit_url if fix_pull_request else None
 
     @property
     def fix_branch(self):
+        fix_commit = self.latest_fix_commit
+        if fix_commit:
+            return fix_commit.branch_name
         fix_pull_request = self.latest_fix_pull_request
         return fix_pull_request.fix_branch if fix_pull_request else None
 
     @property
     def fix_created_at(self):
+        fix_commit = self.latest_fix_commit
+        if fix_commit:
+            return fix_commit.created_at
         fix_pull_request = self.latest_fix_pull_request
         return fix_pull_request.created_at if fix_pull_request else None
 
@@ -272,13 +321,47 @@ class FixCommit(Base):
         default=lambda: datetime.now(UTC),
     )
     created_by = Column(String(255))
-    github_commit_sha = Column(String)
+    github_commit_sha = Column(String, index=True)
+    github_commit_url = Column(Text)
+    commit_message = Column(Text)
+    source_head_sha = Column(String)
+    validation_status = Column(String(30), nullable=False, default="PASSED")
     status = Column(String(30), nullable=False)
     applied_issue_ids = Column(Text, nullable=False)
     branch_name = Column(String(255))
     pull_request_url = Column(Text)
     mode = Column(String(30), nullable=False)
     error_message = Column(Text)
+
+    review = relationship(
+        "Review",
+        back_populates="fix_commits",
+    )
+    pull_request = relationship(
+        "PullRequest",
+        back_populates="fix_commits",
+    )
+    issues = relationship(
+        "Issue",
+        secondary=fix_commit_issues,
+        back_populates="fix_commits",
+    )
+
+    @property
+    def repository(self):
+        return self.pull_request.repository if self.pull_request else None
+
+    @property
+    def author(self):
+        return self.created_by
+
+    @property
+    def pull_request_number(self):
+        return self.pull_request.pull_request_number if self.pull_request else None
+
+    @property
+    def issue_ids(self):
+        return [issue.id for issue in self.issues]
 
 
 class FixPullRequest(Base):

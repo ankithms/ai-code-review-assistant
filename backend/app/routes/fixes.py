@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.ai.review_service import AIReviewServiceError
-from app.db.models import FixCommit, FixPullRequest, Issue, PullRequest, ReviewJob
+from app.db.models import FixCommit, Issue, PullRequest, ReviewJob
 from app.db.session import get_db
 from app.github.github_service import get_file_content, get_pull_request
 from app.repositories.review_repository import get_review_by_id_for_repository
@@ -22,9 +22,9 @@ from app.schemas.fixes import (
     FixPreviewResponse,
     IssueFixResponse,
 )
-from app.schemas.output import FixPullRequestStatus, IssueFixStatus
+from app.schemas.output import IssueFixStatus
 from app.services.fix_generation_service import FixGenerationService
-from app.services.git_commit_service import GitCommitService
+from app.services.git_commit_service import DirectCommitError, GitCommitService
 from app.services.patch_service import PatchEdit, PatchService
 from app.services.validation_service import ValidationService
 
@@ -48,6 +48,11 @@ def generate_review_fixes(
     token = _github_token()
     review = _get_review_or_404(db, repository_id, review_id)
     pull_request = _github_pull_request(db, review, token)
+    _ensure_direct_commit_allowed(
+        repository=review.pull_request.repository,
+        pull_request=pull_request,
+        access_token=token,
+    )
     issues = _select_issues(review, request.issue_ids)
     _validate_issues_eligible_for_fix(issues)
 
@@ -93,6 +98,12 @@ def preview_review_fixes(
 ):
     token = _github_token()
     review = _get_review_or_404(db, repository_id, review_id)
+    pull_request = _github_pull_request(db, review, token)
+    _ensure_direct_commit_allowed(
+        repository=review.pull_request.repository,
+        pull_request=pull_request,
+        access_token=token,
+    )
     issues = _select_issues(review, request.issue_ids)
     _validate_issues_eligible_for_fix(issues)
 
@@ -117,13 +128,7 @@ def apply_review_fixes(
     if not request.confirm:
         raise HTTPException(
             status_code=400,
-            detail="Explicit confirmation is required before creating a branch, commit, or pull request.",
-        )
-
-    if request.mode == FixApplyMode.DIRECT and not request.confirm_direct_commit:
-        raise HTTPException(
-            status_code=400,
-            detail="Direct commits require confirm_direct_commit=true.",
+            detail="Explicit confirmation is required before committing to the pull request branch.",
         )
 
     token = _github_token()
@@ -137,29 +142,39 @@ def apply_review_fixes(
         access_token=token,
     )
 
-    if not preview.valid:
+    if not preview.valid or not preview.included_issue_ids:
         raise HTTPException(
             status_code=400,
             detail={
-                "message": "Fix preview validation failed. No commit was created.",
+                "message": "No selected fix passed validation. No commit was created.",
                 "errors": preview.errors,
             },
         )
 
+    included_issue_ids = set(preview.included_issue_ids)
+    included_issues = [issue for issue in issues if issue.id in included_issue_ids]
+    pull_request = _github_pull_request(db, review, token)
+    commit_message = _build_commit_message(included_issues)
     fix_commit = FixCommit(
         review_id=review.id,
         pull_request_id=review.pull_request.id,
         status="PENDING",
-        applied_issue_ids=json.dumps([issue.id for issue in issues]),
-        mode=request.mode.value,
+        applied_issue_ids=json.dumps([issue.id for issue in included_issues]),
+        mode=FixApplyMode.DIRECT.value,
+        created_by="AI Code Review Assistant",
+        source_head_sha=preview.target_head_sha,
+        commit_message=commit_message,
+        validation_status="PASSED",
+        issues=included_issues,
     )
     db.add(fix_commit)
-    db.flush()
+    db.commit()
+    db.refresh(fix_commit)
 
     try:
         result = GitCommitService().create_fix_commit(
             repository=review.pull_request.repository,
-            base_branch=preview.target_branch,
+            pull_request=pull_request,
             expected_head_sha=preview.target_head_sha,
             patched_files=[
                 _preview_file_to_patched_file(file)
@@ -167,8 +182,7 @@ def apply_review_fixes(
                 if file.valid and file.patched_content is not None
             ],
             access_token=token,
-            pull_request_number=review.pull_request.pull_request_number,
-            mode=request.mode.value,
+            commit_message=commit_message,
         )
     except Exception as exc:
         fix_commit.status = "FAILED"
@@ -181,43 +195,22 @@ def apply_review_fixes(
 
     fix_commit.status = "SUCCESS"
     fix_commit.github_commit_sha = result.commit_sha
+    fix_commit.github_commit_url = result.commit_url
     fix_commit.branch_name = result.branch_name
-    fix_commit.pull_request_url = result.pull_request_url
+    fix_commit.pull_request_url = pull_request.get("html_url")
 
-    if request.mode == FixApplyMode.BRANCH_PR:
-        fix_pull_request = FixPullRequest(
-            repository_id=review.pull_request.repository_id,
-            review_id=review.id,
-            original_pull_request_id=review.pull_request.id,
-            original_pr_number=review.pull_request.pull_request_number,
-            source_commit_sha=preview.target_head_sha,
-            fix_branch=result.branch_name,
-            github_pr_number=result.pull_request_number,
-            github_pr_url=result.pull_request_url,
-            github_commit_sha=result.commit_sha,
-            github_commit_url=result.commit_url,
-            status=FixPullRequestStatus.PR_CREATED.value,
-            issues=issues,
-        )
-        db.add(fix_pull_request)
-
-    for issue in issues:
-        issue.fix_status = (
-            IssueFixStatus.FIX_PR_CREATED.value
-            if request.mode == FixApplyMode.BRANCH_PR
-            else IssueFixStatus.FIX_COMMITTED.value
-        )
+    for issue in included_issues:
+        issue.fix_status = IssueFixStatus.FIX_COMMITTED.value
         db.add(issue)
 
     try:
         db.commit()
     except Exception:
         logger.exception(
-            "GitHub Fix PR was created but database tracking persistence failed: pr=%s branch=%s commit=%s issues=%s",
-            result.pull_request_number,
+            "GitHub AI fix commit was created but database tracking persistence failed: branch=%s commit=%s issues=%s",
             result.branch_name,
             result.commit_sha,
-            [issue.id for issue in issues],
+            [issue.id for issue in included_issues],
         )
         db.rollback()
         raise
@@ -235,6 +228,21 @@ def _github_token() -> str:
         )
 
     return token
+
+
+def _ensure_direct_commit_allowed(
+    repository: str,
+    pull_request: dict,
+    access_token: str,
+) -> None:
+    try:
+        GitCommitService().validate_direct_commit_target(
+            repository=repository,
+            pull_request=pull_request,
+            access_token=access_token,
+        )
+    except DirectCommitError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _get_review_or_404(
@@ -327,6 +335,14 @@ def _validate_issues_eligible_for_fix(issues: list[Issue]) -> None:
                     f"Fix PR #{blocking_fix_pull_request.github_pr_number}."
                 ),
             )
+        if getattr(issue, "fix_status", None) == IssueFixStatus.FIX_COMMITTED.value:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Issue {issue.id} already has an AI fix commit. "
+                    "Wait for the synchronize review before generating another fix."
+                ),
+            )
 
 
 def _build_preview_response(
@@ -339,39 +355,41 @@ def _build_preview_response(
     target_branch = pull_request["head"]["ref"]
     target_head_sha = pull_request["head"]["sha"]
     errors = []
-    edits = []
+    accepted_edits = []
+    included_issue_ids = []
+    excluded_issue_ids = []
     file_contents = {}
     fixes = []
 
     for issue in issues:
         fixes.append(_issue_fix_response(issue))
+        issue_errors = []
         if not _issue_has_generated_fix(issue):
-            errors.append(f"Issue {issue.id} does not have a generated fix")
-            continue
+            issue_errors.append("does not have a generated fix")
 
-        if not issue.fix_base_commit_sha or not issue.fix_file_sha:
-            errors.append(f"Issue {issue.id} fix must be generated against the current branch before preview")
-            continue
+        if not issue_errors and (not issue.fix_base_commit_sha or not issue.fix_file_sha):
+            issue_errors.append("fix must be generated against the current branch before preview")
 
-        if issue.fix_base_commit_sha and issue.fix_base_commit_sha != target_head_sha:
-            errors.append(f"Issue {issue.id} fix was generated for an older branch HEAD")
-            continue
+        if not issue_errors and issue.fix_base_commit_sha != target_head_sha:
+            issue_errors.append("fix was generated for an older branch HEAD")
 
-        if issue.fix_file_path not in file_contents:
-            file_contents[issue.fix_file_path] = get_file_content(
-                repository=review.pull_request.repository,
-                file_path=issue.fix_file_path,
-                ref=target_head_sha,
-                access_token=access_token,
-            )
+        if not issue_errors and issue.fix_file_path not in file_contents:
+            try:
+                file_contents[issue.fix_file_path] = get_file_content(
+                    repository=review.pull_request.repository,
+                    file_path=issue.fix_file_path,
+                    ref=target_head_sha,
+                    access_token=access_token,
+                )
+            except Exception as exc:
+                issue_errors.append(f"could not fetch {issue.fix_file_path}: {exc}")
 
-        file_content = file_contents[issue.fix_file_path]
-        if issue.fix_file_sha and issue.fix_file_sha != file_content["sha"]:
-            errors.append(f"{issue.fix_file_path} changed after fix generation")
-            continue
+        file_content = file_contents.get(issue.fix_file_path)
+        if not issue_errors and issue.fix_file_sha != file_content["sha"]:
+            issue_errors.append(f"{issue.fix_file_path} changed after fix generation")
 
-        edits.append(_primary_patch_edit(issue))
-        for additional_edit in _additional_fix_edits(issue):
+        issue_edits = [] if issue_errors else [_primary_patch_edit(issue)]
+        for additional_edit in _additional_fix_edits(issue) if not issue_errors else []:
             if additional_edit.file_path not in file_contents:
                 try:
                     file_contents[additional_edit.file_path] = get_file_content(
@@ -381,7 +399,7 @@ def _build_preview_response(
                         access_token=access_token,
                     )
                 except Exception as exc:
-                    errors.append(
+                    issue_errors.append(
                         f"{additional_edit.file_path} could not be fetched for additional fix edit: {exc}"
                     )
                     continue
@@ -395,12 +413,12 @@ def _build_preview_response(
                 additional_edit.original_code is not None
                 and additional_edit.original_code.strip("\n") != original_code.strip("\n")
             ):
-                errors.append(
+                issue_errors.append(
                     f"{additional_edit.file_path} changed after additional fix generation"
                 )
                 continue
 
-            edits.append(
+            issue_edits.append(
                 PatchEdit(
                     file_path=additional_edit.file_path,
                     start_line=additional_edit.start_line,
@@ -409,11 +427,36 @@ def _build_preview_response(
                 )
             )
 
+        if not issue_errors:
+            try:
+                candidate_files = PatchService().build_patched_files(
+                    file_contents=file_contents,
+                    edits=[*accepted_edits, *issue_edits],
+                )
+                validation_service = ValidationService()
+                for candidate_file in candidate_files:
+                    issue_errors.extend(
+                        validation_service.validate_file(
+                            file_path=candidate_file.file_path,
+                            content=candidate_file.patched_content,
+                        )
+                    )
+            except ValueError as exc:
+                issue_errors.append(str(exc))
+
+        if issue_errors:
+            excluded_issue_ids.append(issue.id)
+            errors.extend(f"Issue {issue.id} excluded: {error}" for error in issue_errors)
+            continue
+
+        accepted_edits.extend(issue_edits)
+        included_issue_ids.append(issue.id)
+
     preview_files = []
     try:
         patched_files = PatchService().build_patched_files(
             file_contents=file_contents,
-            edits=edits,
+            edits=accepted_edits,
         )
     except ValueError as exc:
         errors.append(str(exc))
@@ -440,10 +483,12 @@ def _build_preview_response(
         review_id=review.id,
         target_branch=target_branch,
         target_head_sha=target_head_sha,
-        valid=not errors,
+        valid=bool(included_issue_ids) and not any(file.errors for file in preview_files),
         errors=errors,
         files=preview_files,
         fixes=fixes,
+        included_issue_ids=included_issue_ids,
+        excluded_issue_ids=excluded_issue_ids,
     )
 
 
@@ -528,8 +573,39 @@ def _fix_commit_response(fix_commit: FixCommit) -> FixCommitResponse:
         mode=fix_commit.mode,
         branch_name=fix_commit.branch_name,
         github_commit_sha=fix_commit.github_commit_sha,
+        github_commit_url=fix_commit.github_commit_url,
+        commit_message=fix_commit.commit_message,
+        author=fix_commit.created_by,
+        repository=fix_commit.repository,
+        pull_request_number=fix_commit.pull_request_number,
+        validation_status=fix_commit.validation_status,
         pull_request_url=fix_commit.pull_request_url,
         applied_issue_ids=json.loads(fix_commit.applied_issue_ids),
         created_at=fix_commit.created_at,
         error_message=fix_commit.error_message,
     )
+
+
+def _build_commit_message(issues: list[Issue]) -> str:
+    if len(issues) == 1:
+        subject = f"fix(ai): resolve {_issue_commit_label(issues[0])}"
+    else:
+        subject = f"fix(ai): resolve {len(issues)} review findings"
+
+    addresses = "\n".join(f"- {_issue_commit_label(issue)}" for issue in issues)
+    return (
+        f"{subject}\n\n"
+        "Generated by AI Code Review Assistant.\n\n"
+        f"Addresses:\n{addresses}"
+    )
+
+
+def _issue_commit_label(issue: Issue) -> str:
+    comment = (getattr(issue, "comment", None) or "review finding").strip()
+    first_line = comment.splitlines()[0].strip().lstrip("#*- ")
+    for marker in ("Impact:", "Suggested fix:", "Fix:"):
+        first_line = first_line.split(marker, 1)[0].strip()
+    first_sentence = first_line.split(". ", 1)[0].rstrip(".")
+    if len(first_sentence) > 60:
+        first_sentence = first_sentence[:57].rstrip() + "..."
+    return first_sentence.lower() or "review finding"
