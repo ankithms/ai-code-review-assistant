@@ -51,9 +51,14 @@ Required environment variables:
 ```bash
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ai_code_review_assistant
 REDIS_URL=redis://localhost:6379/0
+# Optional: queue operations per million that run interrupted-message recovery.
+# The application default is 100000 (10%) for prompt recovery in low-traffic queues.
+DRAMATIQ_REDIS_MAINTENANCE_CHANCE=100000
 GITHUB_ACCESS_TOKEN=...
 GITHUB_WEBHOOK_SECRET=...
 GOOGLE_API_KEY=...
+# Optional hard deadline for one Gemini review/fix invocation.
+AI_MODEL_DEADLINE_SECONDS=120
 ```
 
 ## Local Development
