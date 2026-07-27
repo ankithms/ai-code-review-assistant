@@ -130,7 +130,7 @@ class DiffLineMapper:
             new_line = line.new_line if line.new_line is not None else "-"
             old_line = line.old_line if line.old_line is not None else "-"
             annotated_lines.append(
-                f"[{line.line_ref} | NEW:{new_line} | OLD:{old_line} | "
+                f"[line_ref={line.line_ref} | new_file_line={new_line} | old_file_line={old_line} | "
                 f"{line.line_type.value}] {line.content}"
             )
 

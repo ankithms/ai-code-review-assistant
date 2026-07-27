@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FixApplyMode(str, Enum):
@@ -17,6 +17,15 @@ class FixPullRequestStatus(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class AdditionalEditResponse(BaseModel):
+    file_path: str
+    start_line: int
+    end_line: int
+    original_code: str | None = None
+    replacement_code: str
+    reason: str
+
+
 class IssueFixResponse(BaseModel):
     issue_id: int
     status: str
@@ -25,6 +34,7 @@ class IssueFixResponse(BaseModel):
     end_line: int | None = None
     replacement_code: str | None = None
     explanation: str | None = None
+    additional_edits: list[AdditionalEditResponse] = Field(default_factory=list)
 
 
 class FixGenerateRequest(BaseModel):

@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass
 
 from app.services.diff_line_mapper import (
@@ -50,6 +51,8 @@ class InlineCommentValidator:
         if line_ref:
             resolved = mapper.resolve_line_ref(str(line_ref))
             if resolved is None:
+                resolved = self._resolve_absolute_line_ref(str(line_ref), mapper)
+            if resolved is None:
                 return self._invalid("line reference does not exist for this file")
         else:
             resolved = self._resolve_legacy_absolute_line(issue, mapper)
@@ -65,6 +68,14 @@ class InlineCommentValidator:
             return None
 
         return mapper.find_by_absolute_line(line=int(line), side=side)
+
+    def _resolve_absolute_line_ref(self, line_ref: str, mapper) -> ResolvedLine | None:
+        match = re.fullmatch(r"\s*(NEW|OLD):(\d+)\s*", line_ref, flags=re.IGNORECASE)
+        if not match:
+            return None
+
+        side = CommentSide.RIGHT if match.group(1).upper() == "NEW" else CommentSide.LEFT
+        return mapper.find_by_absolute_line(line=int(match.group(2)), side=side)
 
     def _validate_resolved_line(
         self,

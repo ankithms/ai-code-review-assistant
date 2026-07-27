@@ -1,3 +1,4 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -6,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.ai.review_service import AIReviewServiceError
 from app.db.models import Base, PullRequest, Repository, Review, ReviewJob
 from app.routes import fixes
 from app.services import github_native_fix_service
@@ -106,6 +108,28 @@ class ValidationServiceTests(unittest.TestCase):
 
 
 class FixGenerationServiceTests(unittest.TestCase):
+    def test_temporary_provider_unavailability_is_wrapped_as_retryable(self):
+        context = SimpleNamespace()
+        service = FixGenerationService()
+        unavailable_model = SimpleNamespace(
+            invoke=Mock(
+                side_effect=RuntimeError(
+                    "503 UNAVAILABLE: This model is currently experiencing high demand."
+                )
+            )
+        )
+
+        with patch(
+            "app.services.fix_generation_service.fix_model",
+            unavailable_model,
+        ), patch.object(service, "_build_prompt", return_value="fix prompt"):
+            with self.assertRaises(AIReviewServiceError) as error:
+                service._invoke_fix_model(context)
+
+        self.assertTrue(error.exception.retryable)
+        self.assertIn("AI fix generation service is temporarily unavailable", str(error.exception))
+        self.assertIn("try the AI fix command again later", str(error.exception))
+
     def test_invalid_existing_python_fix_is_regenerated_before_saving(self):
         source = (
             'password = "123"\n'
@@ -265,6 +289,46 @@ class FixGenerationServiceTests(unittest.TestCase):
 
 
 class FixRouteSafetyTests(unittest.TestCase):
+    def test_generate_maps_temporary_ai_failure_to_service_unavailable(self):
+        review = SimpleNamespace(
+            id=2,
+            pull_request=SimpleNamespace(repository="owner/repo"),
+        )
+        issue = SimpleNamespace(id=3)
+        db = SimpleNamespace(rollback=Mock())
+        provider_error = AIReviewServiceError(
+            "AI fix generation service is temporarily unavailable.",
+            retryable=True,
+        )
+
+        with (
+            patch.object(fixes, "_github_token", return_value="token"),
+            patch.object(fixes, "_get_review_or_404", return_value=review),
+            patch.object(
+                fixes,
+                "_github_pull_request",
+                return_value={"head": {"sha": "abc123"}},
+            ),
+            patch.object(fixes, "_select_issues", return_value=[issue]),
+            patch.object(fixes, "_validate_issues_eligible_for_fix"),
+            patch.object(
+                fixes.FixGenerationService,
+                "generate_fixes",
+                side_effect=provider_error,
+            ),
+            self.assertRaises(HTTPException) as error,
+        ):
+            fixes.generate_review_fixes(
+                repository_id=1,
+                review_id=2,
+                request=SimpleNamespace(issue_ids=[3]),
+                db=db,
+            )
+
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertIn("temporarily unavailable", error.exception.detail)
+        db.rollback.assert_called_once_with()
+
     def test_apply_requires_explicit_confirmation(self):
         with self.assertRaises(HTTPException) as context:
             fixes.apply_review_fixes(
@@ -366,6 +430,78 @@ class FixRouteSafetyTests(unittest.TestCase):
         self.assertFalse(preview.valid)
         self.assertIn("must be generated", preview.errors[0])
 
+    def test_preview_applies_additional_edits_atomically(self):
+        review = SimpleNamespace(
+            id=1,
+            pull_request=SimpleNamespace(
+                repository="owner/repo",
+                pull_request_number=12,
+            ),
+        )
+        issue = SimpleNamespace(
+            id=5,
+            fix_status="FIX_GENERATED",
+            fix_file_path="app/service.py",
+            fix_start_line=2,
+            fix_end_line=2,
+            fix_replacement_code="    return normalize(value)",
+            fix_additional_edits=json.dumps(
+                [
+                    {
+                        "file_path": "app/helpers.py",
+                        "start_line": 1,
+                        "end_line": 1,
+                        "original_code": "def normalize(value):",
+                        "replacement_code": "def normalize(value: str) -> str:",
+                        "reason": "Keep helper signature explicit for the service fix.",
+                    }
+                ]
+            ),
+            fix_explanation="Normalize before returning.",
+            fix_base_commit_sha="head",
+            fix_file_sha="service-sha",
+        )
+
+        def file_content(repository, file_path, ref, access_token):
+            if file_path == "app/service.py":
+                return {
+                    "path": file_path,
+                    "sha": "service-sha",
+                    "content": "def save(value):\n    return value\n",
+                }
+            return {
+                "path": file_path,
+                "sha": "helper-sha",
+                "content": "def normalize(value):\n    return value.strip()\n",
+            }
+
+        with (
+            patch.object(
+                fixes,
+                "_github_pull_request",
+                return_value={
+                    "head": {
+                        "ref": "feature",
+                        "sha": "head",
+                    }
+                },
+            ),
+            patch.object(fixes, "get_file_content", side_effect=file_content),
+        ):
+            preview = fixes._build_preview_response(
+                db=SimpleNamespace(),
+                review=review,
+                issues=[issue],
+                access_token="token",
+            )
+
+        self.assertTrue(preview.valid)
+        self.assertEqual(
+            sorted(file.file_path for file in preview.files),
+            ["app/helpers.py", "app/service.py"],
+        )
+        self.assertEqual(preview.fixes[0].additional_edits[0].file_path, "app/helpers.py")
+
     def test_active_fix_pull_request_makes_issue_ineligible(self):
         issue = SimpleNamespace(
             id=123,
@@ -452,6 +588,50 @@ class FixRouteSafetyTests(unittest.TestCase):
 
 
 class GithubNativeFixServiceTests(unittest.TestCase):
+    def test_temporary_ai_failure_posts_retry_later_response(self):
+        payload = {
+            "repository": {"full_name": "owner/repo"},
+            "issue": {
+                "number": 42,
+                "pull_request": {
+                    "url": "https://api.github.com/repos/owner/repo/pulls/42",
+                },
+            },
+            "comment": {"body": "/ai-fix all"},
+        }
+        provider_error = AIReviewServiceError(
+            "AI fix generation service is temporarily unavailable.",
+            retryable=True,
+        )
+        db = SimpleNamespace(rollback=Mock())
+
+        with (
+            patch.object(
+                github_native_fix_service,
+                "_run_fix_command",
+                side_effect=provider_error,
+            ),
+            patch.object(
+                github_native_fix_service,
+                "_post_command_response",
+            ) as post_response,
+            patch.object(github_native_fix_service.logger, "exception") as log_exception,
+        ):
+            handled = github_native_fix_service.handle_github_native_fix_comment(
+                db=db,
+                payload=payload,
+                event="issue_comment",
+                access_token="token",
+            )
+
+        self.assertTrue(handled)
+        response_body = post_response.call_args.kwargs["body"]
+        self.assertIn("AI Fix temporarily unavailable", response_body)
+        self.assertIn("No code or branch was changed", response_body)
+        self.assertIn("run the `/ai-fix` command again later", response_body)
+        db.rollback.assert_called_once_with()
+        log_exception.assert_not_called()
+
     def test_parse_ai_fix_reply_command(self):
         command = github_native_fix_service._parse_fix_command({
             "comment": {

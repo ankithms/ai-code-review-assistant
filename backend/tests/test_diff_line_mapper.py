@@ -180,6 +180,32 @@ class DiffLineMapperTests(unittest.TestCase):
             },
         )
 
+    def test_annotated_diff_labels_stable_line_ref_separately_from_absolute_lines(self):
+        mapper = DiffLineMapper("file.py", "@@ -24,1 +24,3 @@\n context\n+bad\n+line")
+
+        annotated = mapper.annotated_diff()
+
+        self.assertIn("line_ref=L2", annotated)
+        self.assertIn("new_file_line=25", annotated)
+        self.assertNotIn("NEW:25", annotated)
+
+    def test_validator_accepts_model_returned_new_absolute_line_ref(self):
+        multi = MultiFileDiffLineMapper.from_files(
+            [{"filename": "file.py", "patch": "@@ -24,1 +24,3 @@\n context\n+bad\n+line"}]
+        )
+        validator = InlineCommentValidator(multi, source_commit_sha="abc", current_head_sha="abc")
+
+        class Issue:
+            file_path = "file.py"
+            line_ref = "NEW:25"
+            start_line = None
+            start_side = None
+
+        result = validator.validate_issue(Issue())
+
+        self.assertTrue(result.valid)
+        self.assertEqual(result.payload, {"line": 25, "side": "RIGHT"})
+
 
 if __name__ == "__main__":
     unittest.main()

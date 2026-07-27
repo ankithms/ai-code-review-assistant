@@ -128,6 +128,7 @@ class Issue(Base):
     fix_start_line = Column(Integer)
     fix_end_line = Column(Integer)
     fix_replacement_code = Column(Text)
+    fix_additional_edits = Column(Text)
     fix_explanation = Column(Text)
     fix_status = Column(
         String(30),

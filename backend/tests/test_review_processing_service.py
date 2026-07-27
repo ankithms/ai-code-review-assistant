@@ -1,7 +1,7 @@
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 
 from app.db.models import Base, PullRequest, Repository
+from app.ai.review_service import AIReviewServiceError
 from app.schemas.output import CategoryEnum, SeverityEnum
 from app.services import review_processing_service
 
@@ -470,6 +471,103 @@ class GithubCommentPostingTests(unittest.TestCase):
         review_code.assert_not_called()
         save_review.assert_not_called()
 
+    def test_non_retryable_ai_quota_failure_marks_job_failed_without_reraising(self):
+        job = SimpleNamespace(
+            id=50,
+            status="PENDING",
+            repository="owner/repo",
+            pull_request_number=49,
+            commit_sha="abc123",
+        )
+        db = SimpleNamespace(
+            rollback=lambda: None,
+            close=lambda: None,
+        )
+        quota_error = AIReviewServiceError(
+            "AI review service quota was exhausted.",
+            retryable=False,
+        )
+
+        with (
+            patch.object(review_processing_service, "SessionLocal", return_value=db),
+            patch.object(review_processing_service, "get_review_job", return_value=job),
+            patch.object(review_processing_service, "mark_review_job_running"),
+            patch.object(review_processing_service, "_process_pull_request_review", side_effect=quota_error),
+            patch.object(review_processing_service, "mark_review_job_failed") as mark_failed,
+        ):
+            review_processing_service.process_review_job(50)
+
+        mark_failed.assert_called_once_with(db, job, str(quota_error))
+
+    def test_retryable_ai_failure_does_not_post_permanent_failure_comment(self):
+        job = SimpleNamespace(
+            id=51,
+            repository="owner/repo",
+            pull_request_number=49,
+            commit_sha="abc123",
+            event_action="opened",
+            base_commit_sha=None,
+            head_commit_sha="abc123",
+        )
+        retryable_error = AIReviewServiceError(
+            "AI review service is temporarily unavailable.",
+            retryable=True,
+        )
+
+        class Query:
+            def filter(self, *args):
+                return self
+
+            def first(self):
+                return None
+
+        db = SimpleNamespace(query=lambda model: Query())
+        files = [
+            {
+                "filename": "src/app.py",
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n+value = 1",
+            }
+        ]
+        pull_request = {
+            "id": 99,
+            "title": "PR title",
+            "user": {"login": "octocat"},
+            "head": {"sha": "abc123"},
+        }
+
+        with (
+            patch.dict(os.environ, {"GITHUB_ACCESS_TOKEN": "token"}),
+            patch.object(review_processing_service, "get_pr_files", return_value=files),
+            patch.object(review_processing_service, "get_pull_request", return_value=pull_request),
+            patch.object(
+                review_processing_service,
+                "_ensure_pull_request_record",
+                return_value=SimpleNamespace(repository_id=5),
+            ),
+            patch.object(
+                review_processing_service,
+                "get_open_issues_for_pull_request",
+                return_value=[],
+            ),
+            patch.object(
+                review_processing_service.ReviewContextBuilder,
+                "build",
+                return_value=Mock(),
+            ),
+            patch.object(
+                review_processing_service,
+                "review_code",
+                side_effect=retryable_error,
+            ),
+            patch.object(review_processing_service, "_post_ai_failure_comment") as post_failure,
+        ):
+            with self.assertRaises(AIReviewServiceError) as context:
+                review_processing_service._process_pull_request_review(db, job)
+
+        self.assertIs(context.exception, retryable_error)
+        post_failure.assert_not_called()
+
     def test_duplicate_only_review_is_saved_without_posting_github_comments(self):
         issue = SimpleNamespace(
             file="calculator.py",
@@ -520,6 +618,7 @@ class GithubCommentPostingTests(unittest.TestCase):
             patch.dict(os.environ, {"GITHUB_ACCESS_TOKEN": "token"}),
             patch.object(review_processing_service, "get_pr_files", return_value=files),
             patch.object(review_processing_service, "get_pull_request", return_value=pull_request),
+            patch.object(review_processing_service.ReviewContextBuilder, "build", return_value=Mock()),
             patch.object(review_processing_service, "review_code", return_value=ai_review),
             patch.object(
                 review_processing_service,
@@ -611,6 +710,7 @@ class GithubCommentPostingTests(unittest.TestCase):
             patch.object(review_processing_service, "get_compare_files", return_value=compare_files) as get_compare_files,
             patch.object(review_processing_service, "get_pr_files") as get_pr_files,
             patch.object(review_processing_service, "get_pull_request", return_value=pull_request),
+            patch.object(review_processing_service.ReviewContextBuilder, "build", return_value=Mock()),
             patch.object(review_processing_service, "_ensure_pull_request_record", return_value=SimpleNamespace(repository_id=5)),
             patch.object(review_processing_service, "get_open_issues_for_pull_request", return_value=[open_issue]),
             patch.object(review_processing_service, "get_latest_review_for_pull_request", return_value=None),

@@ -5,11 +5,13 @@ import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.ai.review_service import AIReviewServiceError
 from app.db.models import FixCommit, FixPullRequest, Issue, PullRequest, ReviewJob
 from app.db.session import get_db
 from app.github.github_service import get_file_content, get_pull_request
 from app.repositories.review_repository import get_review_by_id_for_repository
 from app.schemas.fixes import (
+    AdditionalEditResponse,
     FixApplyMode,
     FixApplyRequest,
     FixCommitResponse,
@@ -49,14 +51,28 @@ def generate_review_fixes(
     issues = _select_issues(review, request.issue_ids)
     _validate_issues_eligible_for_fix(issues)
 
-    FixGenerationService().generate_fixes(
-        db=db,
-        issues=issues,
-        repository=review.pull_request.repository,
-        target_ref=pull_request["head"]["sha"],
-        target_head_sha=pull_request["head"]["sha"],
-        access_token=token,
-    )
+    try:
+        FixGenerationService().generate_fixes(
+            db=db,
+            issues=issues,
+            repository=review.pull_request.repository,
+            target_ref=pull_request["head"]["sha"],
+            target_head_sha=pull_request["head"]["sha"],
+            access_token=token,
+            pull_request=pull_request,
+        )
+    except AIReviewServiceError as exc:
+        db.rollback()
+        headers = (
+            {"Retry-After": str(exc.retry_after_seconds)}
+            if exc.retry_after_seconds is not None
+            else None
+        )
+        raise HTTPException(
+            status_code=503 if exc.retryable else 429,
+            detail=str(exc),
+            headers=headers,
+        ) from exc
 
     return FixGenerateResponse(
         review_id=review.id,
@@ -354,15 +370,44 @@ def _build_preview_response(
             errors.append(f"{issue.fix_file_path} changed after fix generation")
             continue
 
-        edits.append(
-            PatchEdit(
-                file_path=issue.fix_file_path,
-                start_line=issue.fix_start_line,
-                end_line=issue.fix_end_line,
-                replacement_code=issue.fix_replacement_code,
-                expected_file_sha=issue.fix_file_sha,
+        edits.append(_primary_patch_edit(issue))
+        for additional_edit in _additional_fix_edits(issue):
+            if additional_edit.file_path not in file_contents:
+                try:
+                    file_contents[additional_edit.file_path] = get_file_content(
+                        repository=review.pull_request.repository,
+                        file_path=additional_edit.file_path,
+                        ref=target_head_sha,
+                        access_token=access_token,
+                    )
+                except Exception as exc:
+                    errors.append(
+                        f"{additional_edit.file_path} could not be fetched for additional fix edit: {exc}"
+                    )
+                    continue
+
+            original_code = _extract_line_range(
+                file_contents[additional_edit.file_path]["content"],
+                additional_edit.start_line,
+                additional_edit.end_line,
             )
-        )
+            if (
+                additional_edit.original_code is not None
+                and additional_edit.original_code.strip("\n") != original_code.strip("\n")
+            ):
+                errors.append(
+                    f"{additional_edit.file_path} changed after additional fix generation"
+                )
+                continue
+
+            edits.append(
+                PatchEdit(
+                    file_path=additional_edit.file_path,
+                    start_line=additional_edit.start_line,
+                    end_line=additional_edit.end_line,
+                    replacement_code=additional_edit.replacement_code,
+                )
+            )
 
     preview_files = []
     try:
@@ -420,7 +465,50 @@ def _issue_fix_response(issue: Issue) -> IssueFixResponse:
         end_line=issue.fix_end_line,
         replacement_code=issue.fix_replacement_code,
         explanation=issue.fix_explanation,
+        additional_edits=_additional_fix_edits(issue),
     )
+
+
+def _primary_patch_edit(issue: Issue) -> PatchEdit:
+    return PatchEdit(
+        file_path=issue.fix_file_path,
+        start_line=issue.fix_start_line,
+        end_line=issue.fix_end_line,
+        replacement_code=issue.fix_replacement_code,
+        expected_file_sha=issue.fix_file_sha,
+    )
+
+
+def _additional_fix_edits(issue: Issue) -> list[AdditionalEditResponse]:
+    raw_edits = getattr(issue, "fix_additional_edits", None)
+    if not raw_edits:
+        return []
+    try:
+        payload = json.loads(raw_edits)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    edits = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        try:
+            edits.append(AdditionalEditResponse(**item))
+        except ValueError:
+            continue
+    return edits
+
+
+def _extract_line_range(
+    file_content: str,
+    start_line: int,
+    end_line: int,
+) -> str:
+    lines = file_content.splitlines()
+    if start_line < 1 or end_line > len(lines) or end_line < start_line:
+        return ""
+    return "\n".join(lines[start_line - 1:end_line])
 
 
 def _preview_file_to_patched_file(file: FixPreviewFileResponse):

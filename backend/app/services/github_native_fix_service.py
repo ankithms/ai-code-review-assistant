@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session, joinedload
 
+from app.ai.review_service import AIReviewServiceError
 from app.db.models import FixCommit, FixPullRequest, Issue, PullRequest, Repository, Review
 from app.github.github_service import post_pr_comment, reply_to_review_comment
 from app.repositories.review_repository import get_latest_review_for_pull_request
@@ -59,6 +60,25 @@ def handle_github_native_fix_comment(
             access_token=access_token,
             payload=payload,
         )
+    except AIReviewServiceError as exc:
+        db.rollback()
+        logger.warning(
+            "GitHub-native AI fix command could not reach the AI provider "
+            "retryable=%s: %s",
+            exc.retryable,
+            exc,
+        )
+        if exc.retryable:
+            result_message = (
+                "**AI Fix temporarily unavailable**\n\n"
+                "The AI provider is currently busy. No code or branch was changed. "
+                "Please run the `/ai-fix` command again later."
+            )
+        else:
+            result_message = (
+                "**AI Fix paused**\n\n"
+                f"{exc}"
+            )
     except Exception as exc:
         logger.exception("GitHub-native AI fix command failed")
         result_message = (

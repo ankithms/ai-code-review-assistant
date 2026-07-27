@@ -3,7 +3,7 @@ import os
 import re
 from types import SimpleNamespace
 
-from app.ai.review_service import review_code
+from app.ai.review_service import AIReviewServiceError, review_code
 from app.db.database import SessionLocal
 from app.db.models import PullRequest, Review
 from app.github.github_service import (
@@ -31,6 +31,7 @@ from app.repositories.review_repository import (
 from app.schemas.output import PullRequestSchema
 from app.services.diff_line_mapper import MultiFileDiffLineMapper
 from app.services.inline_comment_validator import InlineCommentValidator
+from app.services.review_context_builder import ReviewContextBuilder
 from app.services.suggestion_eligibility_service import (
     LARGE_FIX_FALLBACK_MESSAGE,
     SuggestionEligibilityService,
@@ -67,6 +68,20 @@ def process_review_job(job_id: int) -> None:
 
         mark_review_job_success(db, job)
         logger.info("Completed review job %s", job.id)
+    except AIReviewServiceError as exc:
+        db.rollback()
+
+        if job is not None:
+            mark_review_job_failed(db, job, str(exc))
+
+        logger.warning(
+            "Review job %s failed due to AI service error retryable=%s: %s",
+            job_id,
+            exc.retryable,
+            exc,
+        )
+        if exc.retryable:
+            raise
     except Exception as exc:
         db.rollback()
 
@@ -162,13 +177,41 @@ def _process_pull_request_review(db, job) -> None:
         return
 
     logger.info("Calling AI review service for job %s", job.id)
+    existing_issues_context = _format_existing_issue_context(open_issues)
+    review_mode = "incremental" if _is_incremental_review_job(job) else "full"
+    review_context = ReviewContextBuilder().build(
+        repository=job.repository,
+        pull_request=pull_request,
+        source_commit_sha=getattr(job, "head_commit_sha", None) or job.commit_sha,
+        files=files,
+        annotated_diff=full_diff,
+        existing_open_issues=existing_issues_context,
+        review_mode=review_mode,
+        access_token=token,
+    )
 
     try:
         ai_review = review_code(
             full_diff,
-            existing_issues_context=_format_existing_issue_context(open_issues),
+            existing_issues_context=existing_issues_context,
             incremental=_is_incremental_review_job(job),
+            review_context=review_context,
         )
+    except AIReviewServiceError as exc:
+        logger.warning(
+            "AI review failed for job %s retryable=%s: %s",
+            job.id,
+            exc.retryable,
+            exc,
+        )
+        if not exc.retryable:
+            _post_ai_failure_comment(
+                repository=job.repository,
+                pull_request_number=job.pull_request_number,
+                access_token=token,
+                error_message=str(exc),
+            )
+        raise
     except Exception as exc:
         logger.exception("AI review failed for job %s", job.id)
         _post_ai_failure_comment(
@@ -207,9 +250,15 @@ def _process_pull_request_review(db, job) -> None:
         )
 
     if not issues_to_post:
+        skip_reason = (
+            "the AI review returned no issues"
+            if not ai_review.issues
+            else "all issues were already present in a previous review"
+        )
         logger.info(
-            "Skipping GitHub comment posting for PR #%s because all issues were already present in a previous review",
+            "Skipping GitHub comment posting for PR #%s because %s",
             job.pull_request_number,
+            skip_reason,
         )
         save_review(
             db=db,
@@ -935,17 +984,26 @@ def _post_ai_failure_comment(
     access_token: str,
     error_message: str,
 ) -> None:
+    body = (
+        "**AI Review Failed**\n\n"
+        "The automated review service could not complete due to an internal error. "
+        "Please check the backend logs and the AI provider configuration.\n\n"
+        f"Error: {error_message}"
+    )
+    if "quota" in error_message.lower():
+        body = (
+            "**AI Review Paused**\n\n"
+            "The AI provider quota was exhausted, so this review could not run right now. "
+            "Retry after the quota resets or configure a higher quota/billing plan.\n\n"
+            f"Error: {error_message}"
+        )
+
     try:
         post_pr_comment(
             repository=repository,
             pull_request_number=pull_request_number,
             access_token=access_token,
-            body=(
-                "**AI Review Failed**\n\n"
-                "The automated review service could not complete due to an internal error. "
-                "Please check the backend logs and the AI provider configuration.\n\n"
-                f"Error: {error_message}"
-            ),
+            body=body,
         )
         logger.info(
             "Posted AI failure summary comment for PR #%s",
