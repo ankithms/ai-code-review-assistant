@@ -320,10 +320,15 @@ class FixRouteSafetyTests(unittest.TestCase):
     def test_generate_maps_temporary_ai_failure_to_service_unavailable(self):
         review = SimpleNamespace(
             id=2,
-            pull_request=SimpleNamespace(repository="owner/repo"),
+            pull_request=SimpleNamespace(id=4, repository="owner/repo"),
         )
         issue = SimpleNamespace(id=3)
         db = SimpleNamespace(rollback=Mock())
+        tracking_record = SimpleNamespace(
+            id=5,
+            source_head_sha="abc123",
+            status="GENERATING",
+        )
         provider_error = AIReviewServiceError(
             "AI fix generation service is temporarily unavailable.",
             retryable=True,
@@ -335,11 +340,18 @@ class FixRouteSafetyTests(unittest.TestCase):
             patch.object(
                 fixes,
                 "_github_pull_request",
-                return_value={"head": {"sha": "abc123"}},
+                return_value={"head": {"sha": "abc123", "ref": "feature"}},
             ),
             patch.object(fixes, "_select_issues", return_value=[issue]),
             patch.object(fixes, "_validate_issues_eligible_for_fix"),
             patch.object(fixes, "_ensure_direct_commit_allowed"),
+            patch.object(
+                fixes.FixCommitTrackingService,
+                "create_or_get",
+                return_value=(tracking_record, True),
+            ),
+            patch.object(fixes.FixCommitTrackingService, "transition"),
+            patch.object(fixes.FixCommitTrackingService, "mark_failed") as mark_failed,
             patch.object(
                 fixes.FixGenerationService,
                 "generate_fixes",
@@ -350,11 +362,12 @@ class FixRouteSafetyTests(unittest.TestCase):
             fixes.generate_review_fixes(
                 repository_id=1,
                 review_id=2,
-                request=SimpleNamespace(issue_ids=[3]),
+                request=SimpleNamespace(issue_ids=[3], retry=False),
                 db=db,
             )
 
         self.assertEqual(error.exception.status_code, 503)
+        mark_failed.assert_called_once_with(db, tracking_record, str(provider_error))
         self.assertIn("temporarily unavailable", error.exception.detail)
         db.rollback.assert_called_once_with()
 

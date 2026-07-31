@@ -33,6 +33,7 @@ from app.repositories.review_repository import (
 )
 from app.schemas.output import PullRequestSchema
 from app.services.diff_line_mapper import MultiFileDiffLineMapper
+from app.services.fix_commit_tracking_service import FixCommitTrackingService
 from app.services.inline_comment_validator import InlineCommentValidator
 from app.services.review_context_builder import ReviewContextBuilder
 from app.services.suggestion_eligibility_service import (
@@ -76,6 +77,10 @@ def process_review_job(job_id: int) -> None:
 
         if job is not None:
             mark_review_job_failed(db, job, str(exc))
+            if getattr(job, "fix_commit_id", None):
+                FixCommitTrackingService().record_review_failure(
+                    db, job.fix_commit_id, str(exc)
+                )
 
         logger.warning(
             "Review job %s failed due to AI service error retryable=%s: %s",
@@ -90,6 +95,10 @@ def process_review_job(job_id: int) -> None:
 
         if job is not None:
             mark_review_job_failed(db, job, str(exc))
+            if getattr(job, "fix_commit_id", None):
+                FixCommitTrackingService().record_review_failure(
+                    db, job.fix_commit_id, str(exc)
+                )
 
         logger.exception("Review job %s failed", job_id)
         raise
@@ -132,6 +141,7 @@ def _process_pull_request_review(db, job) -> None:
             current_head_sha=(pull_request.get("head") or {}).get("sha"),
             access_token=token,
         )
+        _complete_fix_commit_review(db, job, existing_review, None)
         return
 
     pull_request = get_pull_request(
@@ -174,7 +184,7 @@ def _process_pull_request_review(db, job) -> None:
             commit_sha=job.commit_sha,
             new_issues=[],
         )
-        save_review(
+        saved_review = save_review(
             db=db,
             pr_data=pr_schema,
             review_data=SimpleNamespace(
@@ -183,6 +193,7 @@ def _process_pull_request_review(db, job) -> None:
             ),
             commit_sha=job.commit_sha,
         )
+        _complete_fix_commit_review(db, job, saved_review, [])
         return
 
     logger.info("Calling AI review service for job %s", job.id)
@@ -276,12 +287,13 @@ def _process_pull_request_review(db, job) -> None:
             job.pull_request_number,
             skip_reason,
         )
-        save_review(
+        saved_review = save_review(
             db=db,
             pr_data=pr_schema,
             review_data=_review_with_issues(ai_review, []),
             commit_sha=job.commit_sha,
         )
+        _complete_fix_commit_review(db, job, saved_review, ai_review.issues)
         return
 
     _post_github_comments(
@@ -295,12 +307,13 @@ def _process_pull_request_review(db, job) -> None:
         access_token=token,
     )
 
-    save_review(
+    saved_review = save_review(
         db=db,
         pr_data=pr_schema,
         review_data=_review_with_issues(ai_review, issues_to_post),
         commit_sha=job.commit_sha,
     )
+    _complete_fix_commit_review(db, job, saved_review, ai_review.issues)
 
 
 def _build_diff(files: list[dict]) -> str:
@@ -417,8 +430,7 @@ def _reconcile_direct_fix_commit_issues(
         db.query(FixCommit)
         .filter(
             FixCommit.pull_request_id == pull_request_id,
-            FixCommit.github_commit_sha == commit_sha,
-            FixCommit.status == "SUCCESS",
+            FixCommit.generated_commit_sha == commit_sha,
         )
         .order_by(FixCommit.id.desc())
         .first()
@@ -451,6 +463,36 @@ def _reconcile_direct_fix_commit_issues(
         db.add(issue)
 
     return resolved_count
+
+
+def _complete_fix_commit_review(db, job, saved_review: Review, new_issues) -> None:
+    fix_commit = None
+    fix_commit_id = getattr(job, "fix_commit_id", None)
+    if fix_commit_id is not None:
+        fix_commit = db.query(FixCommit).filter(FixCommit.id == fix_commit_id).first()
+    if fix_commit is None:
+        fix_commit = (
+            db.query(FixCommit)
+            .filter(FixCommit.generated_commit_sha == job.commit_sha)
+            .first()
+        )
+    if fix_commit is None or not isinstance(fix_commit, FixCommit):
+        return
+
+    if new_issues is None:
+        new_issues = [
+            link.issue
+            for link in fix_commit.issue_links
+            if link.committed and link.issue.status == IssueStatus.OPEN.value
+        ]
+
+    FixCommitTrackingService().complete_review(
+        db,
+        record=fix_commit,
+        review=saved_review,
+        new_issues=new_issues,
+        issues_match=_issues_match,
+    )
 
 
 def _persisted_id(record) -> int | None:

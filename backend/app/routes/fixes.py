@@ -12,7 +12,6 @@ from app.github.github_service import get_file_content, get_pull_request
 from app.repositories.review_repository import get_review_by_id_for_repository
 from app.schemas.fixes import (
     AdditionalEditResponse,
-    FixApplyMode,
     FixApplyRequest,
     FixCommitResponse,
     FixGenerateRequest,
@@ -22,9 +21,17 @@ from app.schemas.fixes import (
     FixPreviewResponse,
     IssueFixResponse,
 )
-from app.schemas.output import IssueFixStatus
+from app.schemas.output import FixCommitStatus, IssueFixStatus
+from app.services.fix_commit_tracking_service import (
+    FixCommitAlreadyClaimedError,
+    FixCommitTrackingService,
+)
 from app.services.fix_generation_service import FixGenerationService
-from app.services.git_commit_service import DirectCommitError, GitCommitService
+from app.services.git_commit_service import (
+    DirectCommitError,
+    GitCommitService,
+    StaleHeadError,
+)
 from app.services.patch_service import PatchEdit, PatchService
 from app.services.validation_service import ValidationService
 
@@ -48,13 +55,41 @@ def generate_review_fixes(
     token = _github_token()
     review = _get_review_or_404(db, repository_id, review_id)
     pull_request = _github_pull_request(db, review, token)
+    source_branch = pull_request["head"]["ref"]
+    source_head_sha = pull_request["head"]["sha"]
     _ensure_direct_commit_allowed(
         repository=review.pull_request.repository,
         pull_request=pull_request,
         access_token=token,
     )
     issues = _select_issues(review, request.issue_ids)
-    _validate_issues_eligible_for_fix(issues)
+    tracking = FixCommitTrackingService()
+    fix_commit, created = tracking.create_or_get(
+        db,
+        repository_id=repository_id,
+        pull_request_id=review.pull_request.id,
+        review_id=review.id,
+        issues=issues,
+        source_head_sha=source_head_sha,
+        source_branch=source_branch,
+        retry=request.retry,
+    )
+    if not created:
+        return FixGenerateResponse(
+            review_id=review.id,
+            target_head_sha=fix_commit.source_head_sha,
+            fixes=[_issue_fix_response(issue) for issue in issues],
+            fix_commit_id=fix_commit.id,
+            status=fix_commit.status,
+        )
+
+    try:
+        _validate_issues_eligible_for_fix(issues)
+    except HTTPException as exc:
+        tracking.mark_failed(db, fix_commit, str(exc.detail))
+        raise
+
+    tracking.transition(db, fix_commit, FixCommitStatus.GENERATING)
 
     try:
         FixGenerationService().generate_fixes(
@@ -68,6 +103,7 @@ def generate_review_fixes(
         )
     except AIReviewServiceError as exc:
         db.rollback()
+        tracking.mark_failed(db, fix_commit, str(exc))
         headers = (
             {"Retry-After": str(exc.retry_after_seconds)}
             if exc.retry_after_seconds is not None
@@ -78,11 +114,20 @@ def generate_review_fixes(
             detail=str(exc),
             headers=headers,
         ) from exc
+    except Exception as exc:
+        db.rollback()
+        tracking.mark_failed(db, fix_commit, "Fix generation failed")
+        logger.exception("AI fix generation failed for tracking record %s", fix_commit.id)
+        raise HTTPException(status_code=500, detail="Could not generate AI fixes.") from exc
+
+    tracking.mark_generated(db, fix_commit, issues)
 
     return FixGenerateResponse(
         review_id=review.id,
         target_head_sha=pull_request["head"]["sha"],
         fixes=[_issue_fix_response(issue) for issue in issues],
+        fix_commit_id=fix_commit.id,
+        status=fix_commit.status,
     )
 
 
@@ -106,12 +151,32 @@ def preview_review_fixes(
     )
     issues = _select_issues(review, request.issue_ids)
     _validate_issues_eligible_for_fix(issues)
-
-    return _build_preview_response(
+    tracking = FixCommitTrackingService()
+    fix_commit = _tracking_record_or_create(
+        db=db,
+        tracking=tracking,
+        repository_id=repository_id,
+        review=review,
+        issues=issues,
+        pull_request=pull_request,
+        fix_commit_id=request.fix_commit_id,
+    )
+    if pull_request["head"]["sha"] != fix_commit.source_head_sha:
+        tracking.mark_stale(db, fix_commit)
+        raise HTTPException(
+            status_code=409,
+            detail="Pull Request changed during fix generation. Regenerate the fixes.",
+        )
+    tracking.mark_validating(db, fix_commit)
+    preview = _build_preview_response(
         db=db,
         review=review,
         issues=issues,
         access_token=token,
+    )
+    tracking.record_validation(db, fix_commit, preview)
+    return preview.model_copy(
+        update={"fix_commit_id": fix_commit.id, "status": fix_commit.status}
     )
 
 
@@ -134,15 +199,55 @@ def apply_review_fixes(
     token = _github_token()
     review = _get_review_or_404(db, repository_id, review_id)
     issues = _select_issues(review, request.issue_ids)
-    _validate_issues_eligible_for_fix(issues)
+    pull_request = _github_pull_request(db, review, token)
+    tracking = FixCommitTrackingService()
+    fix_commit = _tracking_record_or_create(
+        db=db,
+        tracking=tracking,
+        repository_id=repository_id,
+        review=review,
+        issues=issues,
+        pull_request=pull_request,
+        fix_commit_id=request.fix_commit_id,
+        retry=request.retry,
+    )
+    if fix_commit.generated_commit_sha or fix_commit.status in {
+        FixCommitStatus.COMMITTING.value,
+        FixCommitStatus.COMMITTED.value,
+        FixCommitStatus.REVIEW_PENDING.value,
+        FixCommitStatus.REVIEWED.value,
+        FixCommitStatus.PARTIALLY_RESOLVED.value,
+        FixCommitStatus.RESOLVED.value,
+    }:
+        return _fix_commit_response(fix_commit)
+    try:
+        _validate_issues_eligible_for_fix(issues)
+    except HTTPException as exc:
+        tracking.mark_failed(db, fix_commit, str(exc.detail))
+        raise
+    if pull_request["head"]["sha"] != fix_commit.source_head_sha:
+        tracking.mark_stale(db, fix_commit)
+        raise HTTPException(
+            status_code=409,
+            detail="Pull Request changed during fix generation. Regenerate the fixes.",
+        )
+    if fix_commit.status == FixCommitStatus.REQUESTED.value:
+        tracking.transition(db, fix_commit, FixCommitStatus.GENERATING)
+    tracking.mark_validating(db, fix_commit)
     preview = _build_preview_response(
         db=db,
         review=review,
         issues=issues,
         access_token=token,
     )
+    tracking.record_validation(db, fix_commit, preview)
 
     if not preview.valid or not preview.included_issue_ids:
+        tracking.mark_failed(
+            db,
+            fix_commit,
+            "No selected fix passed validation. No commit was created.",
+        )
         raise HTTPException(
             status_code=400,
             detail={
@@ -154,22 +259,17 @@ def apply_review_fixes(
     included_issue_ids = set(preview.included_issue_ids)
     included_issues = [issue for issue in issues if issue.id in included_issue_ids]
     pull_request = _github_pull_request(db, review, token)
+    if pull_request["head"]["sha"] != fix_commit.source_head_sha:
+        tracking.mark_stale(db, fix_commit)
+        raise HTTPException(
+            status_code=409,
+            detail="Pull Request changed during fix generation. Regenerate the fixes.",
+        )
     commit_message = _build_commit_message(included_issues)
-    fix_commit = FixCommit(
-        review_id=review.id,
-        pull_request_id=review.pull_request.id,
-        status="PENDING",
-        applied_issue_ids=json.dumps([issue.id for issue in included_issues]),
-        mode=FixApplyMode.DIRECT.value,
-        created_by="AI Code Review Assistant",
-        source_head_sha=preview.target_head_sha,
-        commit_message=commit_message,
-        validation_status="PASSED",
-        issues=included_issues,
-    )
-    db.add(fix_commit)
-    db.commit()
-    db.refresh(fix_commit)
+    try:
+        tracking.mark_committing(db, fix_commit, commit_message)
+    except FixCommitAlreadyClaimedError:
+        return _fix_commit_response(fix_commit)
 
     try:
         result = GitCommitService().create_fix_commit(
@@ -184,27 +284,23 @@ def apply_review_fixes(
             access_token=token,
             commit_message=commit_message,
         )
+    except StaleHeadError as exc:
+        tracking.mark_stale(db, fix_commit)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DirectCommitError as exc:
+        tracking.mark_failed(db, fix_commit, str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        fix_commit.status = "FAILED"
-        fix_commit.error_message = str(exc)
-        db.commit()
+        tracking.mark_failed(db, fix_commit, "GitHub commit creation failed")
+        logger.exception("GitHub commit creation failed for tracking record %s", fix_commit.id)
         raise HTTPException(
-            status_code=400,
-            detail=str(exc),
+            status_code=502,
+            detail="GitHub could not create the AI fix commit.",
         ) from exc
 
-    fix_commit.status = "SUCCESS"
-    fix_commit.github_commit_sha = result.commit_sha
-    fix_commit.github_commit_url = result.commit_url
-    fix_commit.branch_name = result.branch_name
     fix_commit.pull_request_url = pull_request.get("html_url")
-
-    for issue in included_issues:
-        issue.fix_status = IssueFixStatus.FIX_COMMITTED.value
-        db.add(issue)
-
     try:
-        db.commit()
+        tracking.mark_committed(db, fix_commit, result)
     except Exception:
         logger.exception(
             "GitHub AI fix commit was created but database tracking persistence failed: branch=%s commit=%s issues=%s",
@@ -212,9 +308,11 @@ def apply_review_fixes(
             result.commit_sha,
             [issue.id for issue in included_issues],
         )
-        db.rollback()
-        raise
-    db.refresh(fix_commit)
+        fix_commit = tracking.recover_after_push(
+            db,
+            fix_commit_id=fix_commit.id,
+            result=result,
+        )
 
     return _fix_commit_response(fix_commit)
 
@@ -571,6 +669,15 @@ def _fix_commit_response(fix_commit: FixCommit) -> FixCommitResponse:
         id=fix_commit.id,
         status=fix_commit.status,
         mode=fix_commit.mode,
+        repository_id=fix_commit.repository_id,
+        pull_request_id=fix_commit.pull_request_id,
+        review_id=fix_commit.review_id,
+        follow_up_review_id=fix_commit.follow_up_review_id,
+        source_branch=fix_commit.source_branch,
+        source_head_sha=fix_commit.source_head_sha,
+        resulting_head_sha=fix_commit.resulting_head_sha,
+        generated_commit_sha=fix_commit.generated_commit_sha,
+        generated_commit_url=fix_commit.generated_commit_url,
         branch_name=fix_commit.branch_name,
         github_commit_sha=fix_commit.github_commit_sha,
         github_commit_url=fix_commit.github_commit_url,
@@ -579,11 +686,85 @@ def _fix_commit_response(fix_commit: FixCommit) -> FixCommitResponse:
         repository=fix_commit.repository,
         pull_request_number=fix_commit.pull_request_number,
         validation_status=fix_commit.validation_status,
+        validation_summary=fix_commit.validation_summary,
         pull_request_url=fix_commit.pull_request_url,
         applied_issue_ids=json.loads(fix_commit.applied_issue_ids),
+        requested_issue_count=fix_commit.requested_issue_count,
+        valid_issue_count=fix_commit.valid_issue_count,
+        skipped_issue_count=fix_commit.skipped_issue_count,
+        resolved_issue_count=fix_commit.resolved_issue_count,
+        remaining_issue_count=fix_commit.remaining_issue_count,
+        failed_issue_count=fix_commit.failed_issue_count,
+        issues=fix_commit.issue_links,
         created_at=fix_commit.created_at,
+        updated_at=fix_commit.updated_at,
+        committed_at=fix_commit.committed_at,
+        reviewed_at=fix_commit.reviewed_at,
+        failure_reason=fix_commit.failure_reason,
         error_message=fix_commit.error_message,
     )
+
+
+def _tracking_record_or_create(
+    *,
+    db: Session,
+    tracking: FixCommitTrackingService,
+    repository_id: int,
+    review,
+    issues: list[Issue],
+    pull_request: dict,
+    fix_commit_id: int | None,
+    retry: bool = False,
+) -> FixCommit:
+    if fix_commit_id is not None:
+        record = (
+            db.query(FixCommit)
+            .filter(
+                FixCommit.id == fix_commit_id,
+                FixCommit.repository_id == repository_id,
+                FixCommit.pull_request_id == review.pull_request.id,
+                FixCommit.review_id == review.id,
+            )
+            .first()
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Fix commit tracking record not found")
+        if sorted(record.issue_ids) != sorted(issue.id for issue in issues):
+            raise HTTPException(
+                status_code=400,
+                detail="Selected issues do not match the existing fix request.",
+            )
+        if record.status in {
+            FixCommitStatus.FAILED.value,
+            FixCommitStatus.STALE.value,
+        }:
+            if not retry:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This fix request failed or became stale. Retry it explicitly.",
+                )
+        else:
+            return record
+
+    record, created = tracking.create_or_get(
+        db,
+        repository_id=repository_id,
+        pull_request_id=review.pull_request.id,
+        review_id=review.id,
+        issues=issues,
+        source_head_sha=pull_request["head"]["sha"],
+        source_branch=pull_request["head"]["ref"],
+        retry=retry,
+    )
+    if not created and record.status in {
+        FixCommitStatus.FAILED.value,
+        FixCommitStatus.STALE.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="This fix request failed or became stale. Retry it explicitly.",
+        )
+    return record
 
 
 def _build_commit_message(issues: list[Issue]) -> str:

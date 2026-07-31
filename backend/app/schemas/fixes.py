@@ -4,6 +4,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.output import FixCommitIssueStatus, FixCommitStatus
+
 
 class FixApplyMode(str, Enum):
     DIRECT = "DIRECT"
@@ -39,16 +41,20 @@ class IssueFixResponse(BaseModel):
 
 class FixGenerateRequest(BaseModel):
     issue_ids: list[int] | None = None
+    retry: bool = False
 
 
 class FixGenerateResponse(BaseModel):
     review_id: int
     target_head_sha: str
     fixes: list[IssueFixResponse]
+    fix_commit_id: int
+    status: FixCommitStatus
 
 
 class FixPreviewRequest(BaseModel):
     issue_ids: list[int] | None = None
+    fix_commit_id: int | None = None
 
 
 class FixPreviewFileResponse(BaseModel):
@@ -69,18 +75,47 @@ class FixPreviewResponse(BaseModel):
     fixes: list[IssueFixResponse]
     included_issue_ids: list[int] = Field(default_factory=list)
     excluded_issue_ids: list[int] = Field(default_factory=list)
+    fix_commit_id: int | None = None
+    status: FixCommitStatus | None = None
 
 
 class FixApplyRequest(BaseModel):
     issue_ids: list[int] | None = None
+    fix_commit_id: int | None = None
     mode: FixApplyMode = FixApplyMode.DIRECT
     confirm: bool = False
+    retry: bool = False
+
+
+class FixCommitIssueResponse(BaseModel):
+    issue_id: int
+    current_issue_id: int | None = None
+    status: FixCommitIssueStatus
+    generated: bool
+    validated: bool
+    committed: bool
+    resolution_status: str | None = None
+    skip_reason: str | None = None
+    failure_reason: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class FixCommitResponse(BaseModel):
     id: int
     status: str
     mode: str
+    repository_id: int | None = None
+    pull_request_id: int
+    review_id: int
+    follow_up_review_id: int | None = None
+    source_branch: str | None = None
+    source_head_sha: str | None = None
+    resulting_head_sha: str | None = None
+    generated_commit_sha: str | None = None
+    generated_commit_url: str | None = None
     branch_name: str | None = None
     github_commit_sha: str | None = None
     github_commit_url: str | None = None
@@ -89,9 +124,21 @@ class FixCommitResponse(BaseModel):
     repository: str | None = None
     pull_request_number: int | None = None
     validation_status: str
+    validation_summary: str | None = None
     pull_request_url: str | None = None
     applied_issue_ids: list[int]
+    requested_issue_count: int = 0
+    valid_issue_count: int = 0
+    skipped_issue_count: int = 0
+    resolved_issue_count: int = 0
+    remaining_issue_count: int = 0
+    failed_issue_count: int = 0
+    issues: list[FixCommitIssueResponse] = Field(default_factory=list)
     created_at: datetime
+    updated_at: datetime
+    committed_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    failure_reason: str | None = None
     error_message: str | None = None
 
     @field_validator("applied_issue_ids", mode="before")

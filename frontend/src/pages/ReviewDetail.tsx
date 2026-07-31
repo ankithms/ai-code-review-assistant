@@ -17,14 +17,9 @@ type Issue = {
   fix_status?: string;
   fix?: IssueFix | null;
   eligible_for_fix: boolean;
-  fix_pr_number?: number | null;
-  fix_pr_url?: string | null;
   fix_commit_sha?: string | null;
   fix_commit_url?: string | null;
-  fix_branch?: string | null;
   fix_created_at?: string | null;
-  fix_merged_at?: string | null;
-  fix_closed_at?: string | null;
 };
 
 type IssueFix = {
@@ -42,14 +37,17 @@ type Review = {
   pr_id: number;
   summary: string;
   issues: Issue[];
-  fix_pull_requests: FixPullRequest[];
   fix_commits: FixCommit[];
 };
 
 type FixCommit = {
   id: number;
   status: string;
-  branch_name?: string | null;
+  source_branch?: string | null;
+  source_head_sha?: string | null;
+  resulting_head_sha?: string | null;
+  generated_commit_sha?: string | null;
+  generated_commit_url?: string | null;
   github_commit_sha?: string | null;
   github_commit_url?: string | null;
   commit_message?: string | null;
@@ -57,23 +55,32 @@ type FixCommit = {
   repository?: string | null;
   pull_request_number?: number | null;
   validation_status: string;
+  validation_summary?: string | null;
   applied_issue_ids: number[];
+  requested_issue_count: number;
+  valid_issue_count: number;
+  skipped_issue_count: number;
+  resolved_issue_count: number;
+  remaining_issue_count: number;
+  failed_issue_count: number;
+  issues: FixCommitIssue[];
   created_at: string;
+  updated_at: string;
+  committed_at?: string | null;
+  reviewed_at?: string | null;
+  follow_up_review_id?: number | null;
+  failure_reason?: string | null;
   error_message?: string | null;
 };
 
-type FixPullRequest = {
-  id: number;
+type FixCommitIssue = {
+  issue_id: number;
   status: string;
-  github_pr_number: number;
-  github_pr_url: string;
-  github_commit_sha?: string | null;
-  github_commit_url?: string | null;
-  fix_branch: string;
-  issue_ids: number[];
-  created_at: string;
-  merged_at?: string | null;
-  closed_at?: string | null;
+  generated: boolean;
+  validated: boolean;
+  committed: boolean;
+  skip_reason?: string | null;
+  failure_reason?: string | null;
 };
 
 type FixPreview = {
@@ -83,6 +90,8 @@ type FixPreview = {
   target_head_sha: string;
   included_issue_ids: number[];
   excluded_issue_ids: number[];
+  fix_commit_id?: number | null;
+  status?: string | null;
   files: {
     file_path: string;
     valid: boolean;
@@ -90,6 +99,39 @@ type FixPreview = {
     patched_content?: string | null;
   }[];
 };
+
+const terminalFixStatuses = new Set([
+  "REVIEWED",
+  "PARTIALLY_RESOLVED",
+  "RESOLVED",
+  "FAILED",
+  "STALE",
+]);
+
+const fixStatusLabel = (status: string) => ({
+  REQUESTED: "Fix requested",
+  GENERATING: "Generating fixes",
+  VALIDATING: "Validating changes",
+  COMMITTING: "Creating commit",
+  COMMITTED: "Commit created",
+  REVIEW_PENDING: "Waiting for re-review",
+  REVIEWED: "Re-review complete",
+  PARTIALLY_RESOLVED: "Some issues still open",
+  RESOLVED: "All issues resolved",
+  FAILED: "Failed",
+  STALE: "PR changed — regenerate required",
+}[status] || status);
+
+const fixIssueStatusLabel = (status: string) => ({
+  REQUESTED: "Requested",
+  GENERATED: "Generated",
+  VALIDATED: "Validated",
+  SKIPPED: "Skipped",
+  COMMITTED: "Committed",
+  RESOLVED: "Fixed",
+  STILL_OPEN: "Still open",
+  FAILED: "Failed",
+}[status] || status);
 
 export default function ReviewDetail() {
   const { id } = useParams();
@@ -119,7 +161,7 @@ export default function ReviewDetail() {
     });
     setSelectedIssueIds([]);
     setFixPreview(null);
-    setFixCommit(null);
+    setFixCommit(nextReview.fix_commits[0] || null);
   }, []);
 
   const loadReview = useCallback(() => {
@@ -160,12 +202,8 @@ export default function ReviewDetail() {
     };
   }, [applyLoadedReview, id, selectedRepositoryId]);
 
-  const isResolvedByMergedFix = (issue: Issue) =>
-    issue.fix_status === "FIX_MERGED" || Boolean(issue.fix_merged_at);
-
   const isResolvedByAiFix = (issue: Issue) =>
-    isResolvedByMergedFix(issue)
-    || (issue.status === "RESOLVED" && issue.fix_status === "FIX_COMMITTED");
+    issue.status === "RESOLVED" && issue.fix_status === "FIX_COMMITTED";
 
   const displayIssueStatus = (issue: Issue) =>
     isResolvedByAiFix(issue) ? "RESOLVED" : issue.status;
@@ -176,7 +214,7 @@ export default function ReviewDetail() {
     }
 
     const issue = review?.issues.find((currentIssue) => currentIssue.id === issueId);
-    if (!issue || isResolvedByMergedFix(issue) || displayIssueStatus(issue) === status) {
+    if (!issue || displayIssueStatus(issue) === status) {
       return;
     }
 
@@ -194,7 +232,7 @@ export default function ReviewDetail() {
 
   const formatResolution = (issue: Issue) => {
     if (isResolvedByAiFix(issue)) {
-      const resolvedAt = issue.resolved_at || issue.fix_merged_at;
+      const resolvedAt = issue.resolved_at;
       return resolvedAt
         ? `${new Date(resolvedAt).toLocaleString()} by AI Fix Commit`
         : "Resolved by AI Fix Commit";
@@ -224,6 +262,28 @@ export default function ReviewDetail() {
     issue_ids: selectedIssueIds.length > 0 ? selectedIssueIds : eligibleIssueIds,
   });
 
+  useEffect(() => {
+    if (
+      selectedRepositoryId === null
+      || !fixCommit
+      || terminalFixStatuses.has(fixCommit.status)
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      api.get(`/repositories/${selectedRepositoryId}/fix-commits/${fixCommit.id}`)
+        .then((res) => {
+          setFixCommit(res.data);
+          setFixMessage(fixStatusLabel(res.data.status));
+          if (terminalFixStatuses.has(res.data.status)) {
+            loadReview();
+          }
+        })
+        .catch((error) => console.error(error));
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [fixCommit, loadReview, selectedRepositoryId]);
+
   const toggleIssueSelection = (issue: Issue) => {
     if (!issue.eligible_for_fix) {
       return;
@@ -245,11 +305,20 @@ export default function ReviewDetail() {
     setFixMessage("Generating fixes...");
     api.post(
       `/repositories/${selectedRepositoryId}/reviews/${id}/fixes/generate`,
-      selectedPayload()
+      {
+        ...selectedPayload(),
+        retry: fixCommit?.status === "FAILED" || fixCommit?.status === "STALE",
+      }
     )
-      .then(() => {
+      .then((res) => {
+        setFixMessage(fixStatusLabel(res.data.status));
+        return api.get(
+          `/repositories/${selectedRepositoryId}/fix-commits/${res.data.fix_commit_id}`
+        );
+      })
+      .then((res) => {
+        setFixCommit(res.data);
         setFixMessage("Fixes generated.");
-        loadReview();
       })
       .catch((error) => {
         console.error(error);
@@ -269,7 +338,7 @@ export default function ReviewDetail() {
     setFixMessage("Building preview...");
     api.post(
       `/repositories/${selectedRepositoryId}/reviews/${id}/fixes/preview`,
-      selectedPayload()
+      { ...selectedPayload(), fix_commit_id: fixCommit?.id }
     )
       .then((res) => {
         setFixPreview(res.data);
@@ -302,13 +371,15 @@ export default function ReviewDetail() {
       `/repositories/${selectedRepositoryId}/reviews/${id}/fixes/apply`,
       {
         ...selectedPayload(),
+        fix_commit_id: fixCommit?.id,
         mode: "DIRECT",
         confirm: true,
+        retry: fixCommit?.status === "FAILED" || fixCommit?.status === "STALE",
       }
     )
       .then((res) => {
         setFixCommit(res.data);
-        setFixMessage("✓ AI committed fixes to this Pull Request.");
+        setFixMessage(fixStatusLabel(res.data.status));
         loadReview();
       })
       .catch((error) => {
@@ -413,12 +484,14 @@ export default function ReviewDetail() {
           )}
         </p>
 
-        {fixCommit?.github_commit_sha && (
+        {(fixCommit?.generated_commit_sha || fixCommit?.github_commit_sha) && (
           <div className="fix-tracking-note">
-            <span>Commit {fixCommit.github_commit_sha.slice(0, 7)}</span>
+            <span>
+              Commit {(fixCommit.generated_commit_sha || fixCommit.github_commit_sha)!.slice(0, 7)}
+            </span>
             {fixCommit.commit_message && <span>{fixCommit.commit_message.split("\n")[0]}</span>}
-            {fixCommit.github_commit_url && (
-              <a href={fixCommit.github_commit_url} target="_blank" rel="noreferrer">
+            {(fixCommit.generated_commit_url || fixCommit.github_commit_url) && (
+              <a href={fixCommit.generated_commit_url || fixCommit.github_commit_url!} target="_blank" rel="noreferrer">
                 View Commit
               </a>
             )}
@@ -484,25 +557,26 @@ export default function ReviewDetail() {
               <div>
                 <p className="page-kicker">AI Fix Commit</p>
                 <h2 className="panel__title">
-                  {commit.github_commit_sha?.slice(0, 7) || commit.status}
+                  {(commit.generated_commit_sha || commit.github_commit_sha)?.slice(0, 7)
+                    || fixStatusLabel(commit.status)}
                 </h2>
               </div>
               <div className="fix-tracker__grid">
                 <div className="meta-item">
                   <span className="meta-label">Status</span>
-                  <span className="meta-value">{commit.status}</span>
+                  <span className="meta-value">{fixStatusLabel(commit.status)}</span>
                 </div>
                 <div className="meta-item">
                   <span className="meta-label">Validation</span>
                   <span className="meta-value">{commit.validation_status}</span>
                 </div>
                 <div className="meta-item">
-                  <span className="meta-label">Branch</span>
-                  <span className="meta-value">{commit.branch_name || "—"}</span>
+                  <span className="meta-label">Source HEAD</span>
+                  <span className="meta-value">{commit.source_head_sha?.slice(0, 7) || "—"}</span>
                 </div>
                 <div className="meta-item">
-                  <span className="meta-label">Issues fixed</span>
-                  <span className="meta-value">{commit.applied_issue_ids.length}</span>
+                  <span className="meta-label">Requested / committed</span>
+                  <span className="meta-value">{commit.requested_issue_count} / {commit.valid_issue_count}</span>
                 </div>
                 <div className="meta-item">
                   <span className="meta-label">Author</span>
@@ -513,14 +587,32 @@ export default function ReviewDetail() {
                   <span className="meta-value">{new Date(commit.created_at).toLocaleString()}</span>
                 </div>
               </div>
+              <div className="fix-tracker__grid">
+                <div className="meta-item"><span className="meta-label">Resolved</span><span className="meta-value">{commit.resolved_issue_count}</span></div>
+                <div className="meta-item"><span className="meta-label">Still open</span><span className="meta-value">{commit.remaining_issue_count}</span></div>
+                <div className="meta-item"><span className="meta-label">Skipped</span><span className="meta-value">{commit.skipped_issue_count}</span></div>
+                <div className="meta-item"><span className="meta-label">Failed</span><span className="meta-value">{commit.failed_issue_count}</span></div>
+              </div>
+              {commit.issues.length > 0 && (
+                <ul className="fix-errors">
+                  {commit.issues.map((issue) => (
+                    <li key={issue.issue_id}>
+                      Issue #{issue.issue_id}: {fixIssueStatusLabel(issue.status)}
+                      {issue.skip_reason ? ` — ${issue.skip_reason}` : ""}
+                      {issue.failure_reason ? ` — ${issue.failure_reason}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {commit.failure_reason && <p className="fix-invalid">{commit.failure_reason}</p>}
               {commit.commit_message && (
                 <pre className="fix-code">{commit.commit_message}</pre>
               )}
-              {commit.github_commit_url && (
+              {(commit.generated_commit_url || commit.github_commit_url) && (
                 <div className="fix-actions">
                   <a
                     className="secondary-button"
-                    href={commit.github_commit_url}
+                    href={commit.generated_commit_url || commit.github_commit_url!}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -530,87 +622,6 @@ export default function ReviewDetail() {
               )}
             </article>
           ))}
-        </section>
-      )}
-
-      {review.fix_pull_requests.length > 0 && (
-        <section className="fix-history">
-          {review.fix_pull_requests.map((fixPullRequest) => {
-            const merged = fixPullRequest.status === "MERGED";
-            const closed = fixPullRequest.status === "CLOSED";
-
-            return (
-              <article
-                key={fixPullRequest.id}
-                className={
-                  merged
-                    ? "panel fix-tracker fix-tracker--merged"
-                    : closed
-                      ? "panel fix-tracker fix-tracker--closed"
-                      : "panel fix-tracker"
-                }
-              >
-                <div>
-                  <p className="page-kicker">
-                    {merged ? "Legacy Fix Merged" : closed ? "Legacy Fix Closed" : "Legacy AI Fix"}
-                  </p>
-                  <h2 className="panel__title">
-                    Historical fix #{fixPullRequest.github_pr_number}
-                  </h2>
-                </div>
-
-                <div className="fix-tracker__grid">
-                  <div className="meta-item">
-                    <span className="meta-label">Status</span>
-                    <span className="meta-value">{fixPullRequest.status}</span>
-                  </div>
-                  <div className="meta-item">
-                    <span className="meta-label">Branch</span>
-                    <span className="meta-value">{fixPullRequest.fix_branch}</span>
-                  </div>
-                  <div className="meta-item">
-                    <span className="meta-label">Issues</span>
-                    <span className="meta-value">{fixPullRequest.issue_ids.length}</span>
-                  </div>
-                  <div className="meta-item">
-                    <span className="meta-label">Created</span>
-                    <span className="meta-value">{new Date(fixPullRequest.created_at).toLocaleString()}</span>
-                  </div>
-                  {fixPullRequest.merged_at && (
-                    <div className="meta-item meta-item--resolved">
-                      <span className="meta-label">Merged</span>
-                      <span className="meta-value">{new Date(fixPullRequest.merged_at).toLocaleString()}</span>
-                    </div>
-                  )}
-                  {fixPullRequest.closed_at && (
-                    <div className="meta-item">
-                      <span className="meta-label">Closed</span>
-                      <span className="meta-value">{new Date(fixPullRequest.closed_at).toLocaleString()}</span>
-                    </div>
-                  )}
-                  {fixPullRequest.github_commit_sha && (
-                    <div className="meta-item">
-                      <span className="meta-label">Commit</span>
-                      <span className="meta-value">{fixPullRequest.github_commit_sha.slice(0, 7)}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="fix-actions">
-                  {fixPullRequest.github_commit_url && (
-                    <a
-                      className="secondary-button"
-                      href={fixPullRequest.github_commit_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View Commit
-                    </a>
-                  )}
-                </div>
-              </article>
-            );
-          })}
         </section>
       )}
 
@@ -624,7 +635,6 @@ export default function ReviewDetail() {
 
         <div className="issues-list">
           {review.issues.map((issue) => {
-            const resolvedByMergedFix = isResolvedByMergedFix(issue);
             const displayStatus = displayIssueStatus(issue);
             const resolution = formatResolution(issue);
 
@@ -642,7 +652,7 @@ export default function ReviewDetail() {
                     <label className="issue-select">
                       <input
                         type="checkbox"
-                        disabled={!issue.eligible_for_fix || resolvedByMergedFix}
+                        disabled={!issue.eligible_for_fix}
                         checked={selectedIssueIds.includes(issue.id)}
                         onChange={() => toggleIssueSelection(issue)}
                       />
@@ -651,7 +661,7 @@ export default function ReviewDetail() {
                     <SeverityBadge severity={issue.severity} />
                     <StatusBadge status={displayStatus} />
                     <span className="badge badge--fix">
-                      {resolvedByMergedFix ? "FIX_MERGED" : issue.fix_status || "NO_FIX"}
+                      {issue.fix_status || "NO_FIX"}
                     </span>
                   </div>
 
@@ -661,12 +671,7 @@ export default function ReviewDetail() {
                         key={status}
                         type="button"
                         onClick={() => updateIssueStatus(issue.id, status)}
-                        disabled={resolvedByMergedFix || displayStatus === status}
-                        title={
-                          resolvedByMergedFix
-                            ? "This issue was resolved by an AI fix."
-                            : undefined
-                        }
+                        disabled={displayStatus === status}
                         className={
                           displayStatus === status
                             ? "status-button status-button--active"

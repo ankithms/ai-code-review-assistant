@@ -1,5 +1,6 @@
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Integer,
@@ -7,12 +8,20 @@ from sqlalchemy import (
     Table,
     Text,
     ForeignKey,
+    Index,
+    UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, synonym
 from sqlalchemy.orm import declarative_base
 from datetime import UTC, datetime
 
-from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
+from app.schemas.output import (
+    FixCommitIssueStatus,
+    FixCommitStatus,
+    FixPullRequestStatus,
+    IssueFixStatus,
+    IssueStatus,
+)
 
 Base = declarative_base()
 
@@ -23,14 +32,6 @@ fix_pull_request_issues = Table(
     Column("fix_pull_request_id", ForeignKey("fix_pull_requests.id"), primary_key=True),
     Column("issue_id", ForeignKey("issues.id"), primary_key=True),
 )
-
-fix_commit_issues = Table(
-    "fix_commit_issues",
-    Base.metadata,
-    Column("fix_commit_id", ForeignKey("fix_commits.id"), primary_key=True),
-    Column("issue_id", ForeignKey("issues.id"), primary_key=True),
-)
-
 
 class PullRequest(Base):
     __tablename__ = "pull_requests"
@@ -83,6 +84,11 @@ class Repository(Base):
         back_populates="repository_ref",
     )
 
+    fix_commits = relationship(
+        "FixCommit",
+        back_populates="repository_ref",
+    )
+
 
 class Review(Base):
     __tablename__ = "reviews"
@@ -96,6 +102,7 @@ class Review(Base):
 
     summary = Column(Text)
     commit_sha = Column(String, nullable=False)
+    fix_commit_id = Column(Integer, ForeignKey("fix_commits.id"), nullable=True, index=True)
 
     pull_request = relationship(
         "PullRequest",
@@ -115,6 +122,14 @@ class Review(Base):
     fix_commits = relationship(
         "FixCommit",
         back_populates="review",
+        foreign_keys="FixCommit.review_id",
+        order_by="FixCommit.created_at.desc()",
+    )
+
+    triggering_fix_commit = relationship(
+        "FixCommit",
+        back_populates="follow_up_review",
+        foreign_keys=[fix_commit_id],
     )
 
 
@@ -181,8 +196,19 @@ class Issue(Base):
 
     fix_commits = relationship(
         "FixCommit",
-        secondary=fix_commit_issues,
+        secondary="fix_commit_issues",
         back_populates="issues",
+        primaryjoin="Issue.id == FixCommitIssue.issue_id",
+        secondaryjoin="FixCommit.id == FixCommitIssue.fix_commit_id",
+        overlaps="issue_links,fix_commit,issue",
+    )
+
+    fix_commit_links = relationship(
+        "FixCommitIssue",
+        back_populates="issue",
+        foreign_keys="FixCommitIssue.issue_id",
+        cascade="all, delete-orphan",
+        overlaps="fix_commits,issues",
     )
 
     @property
@@ -219,7 +245,7 @@ class Issue(Base):
         successful_commits = [
             fix_commit
             for fix_commit in self.fix_commits
-            if fix_commit.status == "SUCCESS"
+            if fix_commit.generated_commit_sha
         ]
         return sorted(
             successful_commits,
@@ -307,12 +333,22 @@ class ReviewJob(Base):
     started_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
     error_message = Column(Text)
+    fix_commit_id = Column(Integer, ForeignKey("fix_commits.id"), nullable=True, index=True)
+
+    fix_commit = relationship("FixCommit", back_populates="review_jobs")
 
 
 class FixCommit(Base):
     __tablename__ = "fix_commits"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", "attempt", name="uq_fix_commits_identity_attempt"),
+        Index("ix_fix_commits_pull_request_id", "pull_request_id"),
+        Index("ix_fix_commits_source_head_sha", "source_head_sha"),
+        Index("ix_fix_commits_status", "status"),
+    )
 
     id = Column(Integer, primary_key=True)
+    repository_id = Column(Integer, ForeignKey("repositories.id"), nullable=True)
     review_id = Column(Integer, ForeignKey("reviews.id"), nullable=False)
     pull_request_id = Column(Integer, ForeignKey("pull_requests.id"), nullable=False)
     created_at = Column(
@@ -320,32 +356,78 @@ class FixCommit(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+    committed_at = Column(DateTime(timezone=True))
+    reviewed_at = Column(DateTime(timezone=True))
     created_by = Column(String(255))
-    github_commit_sha = Column(String, index=True)
-    github_commit_url = Column(Text)
+    generated_commit_sha = Column(String, unique=True, index=True)
+    generated_commit_url = Column(Text)
     commit_message = Column(Text)
-    source_head_sha = Column(String)
+    source_head_sha = Column(String, nullable=False)
+    resulting_head_sha = Column(String)
+    source_branch = Column(String(255), nullable=False)
+    idempotency_key = Column(String(64), nullable=True)
+    attempt = Column(Integer, nullable=False, default=1, server_default="1")
     validation_status = Column(String(30), nullable=False, default="PASSED")
-    status = Column(String(30), nullable=False)
-    applied_issue_ids = Column(Text, nullable=False)
-    branch_name = Column(String(255))
+    validation_summary = Column(Text)
+    status = Column(
+        String(30),
+        nullable=False,
+        default=FixCommitStatus.REQUESTED.value,
+        server_default=FixCommitStatus.REQUESTED.value,
+    )
+    requested_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    valid_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    skipped_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    resolved_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    remaining_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    failed_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    applied_issue_ids = Column(Text, nullable=False, default="[]", server_default="[]")
     pull_request_url = Column(Text)
-    mode = Column(String(30), nullable=False)
-    error_message = Column(Text)
+    mode = Column(String(30), nullable=False, default="DIRECT", server_default="DIRECT")
+    failure_reason = Column(Text)
+
+    github_commit_sha = synonym("generated_commit_sha")
+    github_commit_url = synonym("generated_commit_url")
+    branch_name = synonym("source_branch")
+    error_message = synonym("failure_reason")
 
     review = relationship(
         "Review",
         back_populates="fix_commits",
+        foreign_keys=[review_id],
     )
+    repository_ref = relationship("Repository", back_populates="fix_commits")
     pull_request = relationship(
         "PullRequest",
         back_populates="fix_commits",
     )
     issues = relationship(
         "Issue",
-        secondary=fix_commit_issues,
+        secondary="fix_commit_issues",
         back_populates="fix_commits",
+        primaryjoin="FixCommit.id == FixCommitIssue.fix_commit_id",
+        secondaryjoin="Issue.id == FixCommitIssue.issue_id",
+        overlaps="issue_links,fix_commit,issue",
     )
+    issue_links = relationship(
+        "FixCommitIssue",
+        back_populates="fix_commit",
+        cascade="all, delete-orphan",
+        overlaps="issues,fix_commits",
+    )
+    follow_up_review = relationship(
+        "Review",
+        back_populates="triggering_fix_commit",
+        foreign_keys="Review.fix_commit_id",
+        uselist=False,
+    )
+    review_jobs = relationship("ReviewJob", back_populates="fix_commit")
 
     @property
     def repository(self):
@@ -361,7 +443,59 @@ class FixCommit(Base):
 
     @property
     def issue_ids(self):
-        return [issue.id for issue in self.issues]
+        return [link.issue_id for link in self.issue_links] or [issue.id for issue in self.issues]
+
+    @property
+    def follow_up_review_id(self):
+        return self.follow_up_review.id if self.follow_up_review else None
+
+
+class FixCommitIssue(Base):
+    __tablename__ = "fix_commit_issues"
+    __table_args__ = (
+        Index("ix_fix_commit_issues_fix_commit_id", "fix_commit_id"),
+        Index("ix_fix_commit_issues_issue_id", "issue_id"),
+    )
+
+    fix_commit_id = Column(Integer, ForeignKey("fix_commits.id"), primary_key=True)
+    issue_id = Column(Integer, ForeignKey("issues.id"), primary_key=True)
+    current_issue_id = Column(Integer, ForeignKey("issues.id"), nullable=True)
+    status = Column(
+        String(30),
+        nullable=False,
+        default=FixCommitIssueStatus.REQUESTED.value,
+        server_default=FixCommitIssueStatus.REQUESTED.value,
+    )
+    generated = Column(Boolean, nullable=False, default=False, server_default="false")
+    validated = Column(Boolean, nullable=False, default=False, server_default="false")
+    committed = Column(Boolean, nullable=False, default=False, server_default="false")
+    resolution_status = Column(String(30))
+    skip_reason = Column(Text)
+    failure_reason = Column(Text)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    fix_commit = relationship(
+        "FixCommit",
+        back_populates="issue_links",
+        overlaps="issues,fix_commits",
+    )
+    issue = relationship(
+        "Issue",
+        foreign_keys=[issue_id],
+        back_populates="fix_commit_links",
+        overlaps="issues,fix_commits",
+    )
+    current_issue = relationship("Issue", foreign_keys=[current_issue_id])
 
 
 class FixPullRequest(Base):

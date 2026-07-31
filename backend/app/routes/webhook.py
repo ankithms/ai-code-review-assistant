@@ -19,6 +19,7 @@ from app.repositories.review_job_repository import (
 )
 from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
 from app.services.github_native_fix_service import handle_github_native_fix_comment
+from app.services.fix_commit_tracking_service import FixCommitTrackingService
 from app.tasks.review_tasks import process_review_job
 
 logger = logging.getLogger(__name__)
@@ -109,9 +110,22 @@ async def github_webhook(
             detail="Webhook payload is missing previous head commit sha for synchronize review",
         )
 
+    tracking = FixCommitTrackingService()
+    matched_fix_commit = None
+    if action == "synchronize":
+        matched_fix_commit = tracking.match_synchronize_commit(
+            db,
+            repository_full_name=repository_full_name,
+            pull_request_number=pull_request_number,
+            commit_sha=commit_sha,
+        )
+
     active_job = get_active_review_job_by_commit(db, commit_sha)
 
     if active_job:
+        if matched_fix_commit is not None and active_job.fix_commit_id is None:
+            active_job.fix_commit_id = matched_fix_commit.id
+            db.commit()
         logger.info(
             "Commit %s already has active review job %s",
             commit_sha,
@@ -154,11 +168,17 @@ async def github_webhook(
         base_commit_sha=base_commit_sha,
         head_commit_sha=head_commit_sha,
     )
+    if matched_fix_commit is not None:
+        job.fix_commit_id = matched_fix_commit.id
+        db.commit()
+        db.refresh(job)
 
     try:
         process_review_job.send(job.id)
     except Exception as exc:
         mark_review_job_failed(db, job, str(exc))
+        if matched_fix_commit is not None:
+            tracking.record_review_failure(db, matched_fix_commit.id, str(exc))
         logger.exception("Failed to enqueue review job %s", job.id)
         raise HTTPException(
             status_code=503,

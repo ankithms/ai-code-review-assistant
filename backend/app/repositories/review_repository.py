@@ -125,6 +125,8 @@ def get_review_by_id_for_repository(
             joinedload(Review.issues).joinedload(Issue.fix_commits),
             joinedload(Review.fix_pull_requests).joinedload(FixPullRequest.issues),
             joinedload(Review.fix_commits).joinedload(FixCommit.issues),
+            joinedload(Review.fix_commits).joinedload(FixCommit.issue_links),
+            joinedload(Review.fix_commits).joinedload(FixCommit.follow_up_review),
             joinedload(Review.pull_request),
         )
         .filter(

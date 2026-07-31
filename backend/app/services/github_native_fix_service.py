@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -6,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session, joinedload
 
 from app.ai.review_service import AIReviewServiceError
-from app.db.models import FixCommit, Issue, PullRequest, Repository, Review
+from app.db.models import Issue, PullRequest, Repository, Review
 from app.github.github_service import post_pr_comment, reply_to_review_comment
 from app.repositories.review_repository import get_latest_review_for_pull_request
 from app.routes.fixes import (
@@ -16,9 +15,13 @@ from app.routes.fixes import (
     _preview_file_to_patched_file,
     _validate_issues_eligible_for_fix,
 )
-from app.schemas.output import IssueFixStatus
+from app.schemas.output import FixCommitStatus
+from app.services.fix_commit_tracking_service import (
+    FixCommitAlreadyClaimedError,
+    FixCommitTrackingService,
+)
 from app.services.fix_generation_service import FixGenerationService
-from app.services.git_commit_service import GitCommitService
+from app.services.git_commit_service import GitCommitService, StaleHeadError
 
 logger = logging.getLogger(__name__)
 
@@ -163,16 +166,44 @@ def _run_fix_command(
         access_token=access_token,
     )
     target_head_sha = pull_request["head"]["sha"]
-
-    FixGenerationService().generate_fixes(
-        db=db,
+    commenter = ((payload.get("comment") or {}).get("user") or {}).get("login")
+    tracking = FixCommitTrackingService()
+    fix_commit, created = tracking.create_or_get(
+        db,
+        repository_id=pull_request_record.repository_id,
+        pull_request_id=pull_request_record.id,
+        review_id=review.id,
         issues=issues,
-        repository=repository,
-        target_ref=target_head_sha,
-        target_head_sha=target_head_sha,
-        access_token=access_token,
-        pull_request=pull_request,
+        source_head_sha=target_head_sha,
+        source_branch=pull_request["head"]["ref"],
+        requested_by=commenter,
     )
+    if not created:
+        if fix_commit.generated_commit_sha:
+            return (
+                "**This AI fix request was already committed**\n\n"
+                f"Commit: [{fix_commit.generated_commit_sha[:7]}]"
+                f"({fix_commit.generated_commit_url})"
+            )
+        return f"**This AI fix request is already being tracked:** `{fix_commit.status}`"
+    tracking.transition(db, fix_commit, FixCommitStatus.GENERATING)
+
+    try:
+        FixGenerationService().generate_fixes(
+            db=db,
+            issues=issues,
+            repository=repository,
+            target_ref=target_head_sha,
+            target_head_sha=target_head_sha,
+            access_token=access_token,
+            pull_request=pull_request,
+        )
+    except Exception as exc:
+        db.rollback()
+        tracking.mark_failed(db, fix_commit, "Fix generation failed")
+        raise
+    tracking.mark_generated(db, fix_commit, issues)
+    tracking.mark_validating(db, fix_commit)
 
     preview = _build_preview_response(
         db=db,
@@ -180,32 +211,27 @@ def _run_fix_command(
         issues=issues,
         access_token=access_token,
     )
+    tracking.record_validation(db, fix_commit, preview)
     if not preview.valid:
+        tracking.mark_failed(db, fix_commit, "No selected fix passed validation")
         errors = "\n".join(f"- {error}" for error in preview.errors)
         raise ValueError(f"Fix preview validation failed. No commit was created.\n\n{errors}")
 
     included_ids = set(preview.included_issue_ids)
     included_issues = [issue for issue in issues if issue.id in included_ids]
     if not included_issues:
+        tracking.mark_failed(db, fix_commit, "No selected fix passed validation")
         raise ValueError("No selected fix passed validation. No commit was created.")
 
-    commenter = ((payload.get("comment") or {}).get("user") or {}).get("login")
     commit_message = _build_commit_message(included_issues)
-    fix_commit = FixCommit(
-        review_id=review.id,
-        pull_request_id=review.pull_request.id,
-        status="PENDING",
-        applied_issue_ids=json.dumps([issue.id for issue in included_issues]),
-        mode="DIRECT",
-        created_by=commenter or "AI Code Review Assistant",
-        source_head_sha=preview.target_head_sha,
-        commit_message=commit_message,
-        validation_status="PASSED",
-        issues=included_issues,
-    )
-    db.add(fix_commit)
-    db.commit()
-    db.refresh(fix_commit)
+    pull_request = _github_pull_request(db, review, access_token)
+    if pull_request["head"]["sha"] != fix_commit.source_head_sha:
+        tracking.mark_stale(db, fix_commit)
+        raise StaleHeadError("Pull Request changed during fix generation")
+    try:
+        tracking.mark_committing(db, fix_commit, commit_message)
+    except FixCommitAlreadyClaimedError:
+        return f"**This AI fix request is already being tracked:** `{fix_commit.status}`"
 
     try:
         result = GitCommitService().create_fix_commit(
@@ -220,23 +246,26 @@ def _run_fix_command(
             access_token=access_token,
             commit_message=commit_message,
         )
+    except StaleHeadError:
+        tracking.mark_stale(db, fix_commit)
+        raise
     except Exception as exc:
-        fix_commit.status = "FAILED"
-        fix_commit.error_message = str(exc)
-        db.commit()
+        tracking.mark_failed(db, fix_commit, str(exc))
         raise
 
-    fix_commit.status = "SUCCESS"
-    fix_commit.github_commit_sha = result.commit_sha
-    fix_commit.github_commit_url = result.commit_url
-    fix_commit.branch_name = result.branch_name
     fix_commit.pull_request_url = pull_request.get("html_url")
-
-    for issue in included_issues:
-        issue.fix_status = IssueFixStatus.FIX_COMMITTED.value
-        db.add(issue)
-
-    db.commit()
+    try:
+        tracking.mark_committed(db, fix_commit, result)
+    except Exception:
+        logger.exception(
+            "GitHub-native AI fix commit was pushed but lifecycle persistence failed: %s",
+            result.commit_sha,
+        )
+        tracking.recover_after_push(
+            db,
+            fix_commit_id=fix_commit.id,
+            result=result,
+        )
 
     return (
         "**AI fixes committed to this Pull Request**\n\n"
