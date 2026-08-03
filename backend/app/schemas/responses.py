@@ -1,9 +1,14 @@
 from datetime import datetime
 
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, Field, computed_field
 
 from app.schemas.output import IssueStatus
-from app.schemas.fixes import FixCommitResponse, FixPullRequestResponse, IssueFixResponse
+from app.schemas.fixes import (
+    FixCommitResponse,
+    FixPullRequestResponse,
+    IssueFixResponse,
+    IssueTimelineEventResponse,
+)
 
 
 class IssueResponse(BaseModel):
@@ -38,6 +43,8 @@ class IssueResponse(BaseModel):
     fix_created_at: datetime | None = None
     fix_merged_at: datetime | None = None
     fix_closed_at: datetime | None = None
+    introduced_by_fix_commit_id: int | None = None
+    timeline: list[IssueTimelineEventResponse] = Field(default_factory=list)
 
     model_config = {
         "from_attributes": True

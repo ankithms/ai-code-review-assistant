@@ -588,6 +588,52 @@ button {
   line-height: 1.5;
 }
 
+.fix-verification-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fix-verification-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.verification-state {
+  font-weight: 850;
+}
+
+.verification-state--resolved { color: var(--success); }
+.verification-state--still_open,
+.verification-state--moved { color: #b45309; }
+.verification-state--failed_to_verify { color: var(--danger); }
+
+.verification-location {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.fix-new-issues {
+  padding: 12px;
+  border: 1px solid rgba(217, 119, 6, 0.26);
+  border-radius: 8px;
+  background: #fffbeb;
+  font-size: 13px;
+}
+
+.fix-new-issues ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
 .fix-valid {
   color: var(--success);
   font-size: 13px;

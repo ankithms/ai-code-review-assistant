@@ -87,6 +87,14 @@ class FixApplyRequest(BaseModel):
     retry: bool = False
 
 
+class IssueTimelineEventResponse(BaseModel):
+    event: str
+    details: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class FixCommitIssueResponse(BaseModel):
     issue_id: int
     current_issue_id: int | None = None
@@ -95,10 +103,27 @@ class FixCommitIssueResponse(BaseModel):
     validated: bool
     committed: bool
     resolution_status: str | None = None
+    original_file: str | None = None
+    original_line: int | None = None
+    current_file: str | None = None
+    current_line: int | None = None
+    match_confidence: str | None = None
+    match_reason: str | None = None
     skip_reason: str | None = None
     failure_reason: str | None = None
+    timeline: list[IssueTimelineEventResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+class FixCommitNewIssueResponse(BaseModel):
+    id: int
+    severity: str
+    category: str
+    file: str | None = None
+    line: int | None = None
+    comment: str
 
     model_config = {"from_attributes": True}
 
@@ -132,8 +157,18 @@ class FixCommitResponse(BaseModel):
     skipped_issue_count: int = 0
     resolved_issue_count: int = 0
     remaining_issue_count: int = 0
+    moved_issue_count: int = 0
+    new_issue_count: int = 0
     failed_issue_count: int = 0
     issues: list[FixCommitIssueResponse] = Field(default_factory=list)
+    resolved_issues: list[FixCommitIssueResponse] = Field(default_factory=list)
+    remaining_issues: list[FixCommitIssueResponse] = Field(default_factory=list)
+    moved_issues: list[FixCommitIssueResponse] = Field(default_factory=list)
+    failed_to_verify_issues: list[FixCommitIssueResponse] = Field(default_factory=list)
+    new_issues: list[FixCommitNewIssueResponse] = Field(default_factory=list)
+    verification_status: str = "PENDING"
+    verification_completed_at: datetime | None = None
+    verification_summary: str | None = None
     created_at: datetime
     updated_at: datetime
     committed_at: datetime | None = None

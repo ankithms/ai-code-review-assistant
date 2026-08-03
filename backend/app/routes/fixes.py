@@ -665,6 +665,14 @@ def _preview_file_to_patched_file(file: FixPreviewFileResponse):
 
 
 def _fix_commit_response(fix_commit: FixCommit) -> FixCommitResponse:
+    issue_links = list(fix_commit.issue_links)
+    verification_status = (
+        "COMPLETED"
+        if fix_commit.verification_completed_at is not None
+        else "FAILED"
+        if (fix_commit.failure_reason or "").startswith("Follow-up review failed")
+        else "PENDING"
+    )
     return FixCommitResponse(
         id=fix_commit.id,
         status=fix_commit.status,
@@ -694,8 +702,20 @@ def _fix_commit_response(fix_commit: FixCommit) -> FixCommitResponse:
         skipped_issue_count=fix_commit.skipped_issue_count,
         resolved_issue_count=fix_commit.resolved_issue_count,
         remaining_issue_count=fix_commit.remaining_issue_count,
+        moved_issue_count=fix_commit.moved_issue_count,
+        new_issue_count=fix_commit.new_issue_count,
         failed_issue_count=fix_commit.failed_issue_count,
-        issues=fix_commit.issue_links,
+        issues=issue_links,
+        resolved_issues=[link for link in issue_links if link.status == "RESOLVED"],
+        remaining_issues=[link for link in issue_links if link.status == "STILL_OPEN"],
+        moved_issues=[link for link in issue_links if link.status == "MOVED"],
+        failed_to_verify_issues=[
+            link for link in issue_links if link.status == "FAILED_TO_VERIFY"
+        ],
+        new_issues=fix_commit.new_issues,
+        verification_status=verification_status,
+        verification_completed_at=fix_commit.verification_completed_at,
+        verification_summary=fix_commit.verification_summary,
         created_at=fix_commit.created_at,
         updated_at=fix_commit.updated_at,
         committed_at=fix_commit.committed_at,

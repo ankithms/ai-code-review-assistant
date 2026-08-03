@@ -62,8 +62,14 @@ type FixCommit = {
   skipped_issue_count: number;
   resolved_issue_count: number;
   remaining_issue_count: number;
+  moved_issue_count: number;
+  new_issue_count: number;
   failed_issue_count: number;
   issues: FixCommitIssue[];
+  new_issues: FixCommitNewIssue[];
+  verification_status: string;
+  verification_completed_at?: string | null;
+  verification_summary?: string | null;
   created_at: string;
   updated_at: string;
   committed_at?: string | null;
@@ -75,12 +81,29 @@ type FixCommit = {
 
 type FixCommitIssue = {
   issue_id: number;
+  current_issue_id?: number | null;
   status: string;
   generated: boolean;
   validated: boolean;
   committed: boolean;
+  original_file?: string | null;
+  original_line?: number | null;
+  current_file?: string | null;
+  current_line?: number | null;
+  match_confidence?: string | null;
+  match_reason?: string | null;
   skip_reason?: string | null;
   failure_reason?: string | null;
+  timeline?: { event: string; details?: string | null; created_at: string }[];
+};
+
+type FixCommitNewIssue = {
+  id: number;
+  severity: string;
+  category: string;
+  file?: string | null;
+  line?: number | null;
+  comment: string;
 };
 
 type FixPreview = {
@@ -128,10 +151,19 @@ const fixIssueStatusLabel = (status: string) => ({
   VALIDATED: "Validated",
   SKIPPED: "Skipped",
   COMMITTED: "Committed",
-  RESOLVED: "Fixed",
-  STILL_OPEN: "Still open",
+  RESOLVED: "Resolved",
+  STILL_OPEN: "Still Open",
+  MOVED: "Moved",
+  FAILED_TO_VERIFY: "Failed Verification",
   FAILED: "Failed",
 }[status] || status);
+
+const fixIssueStatusIcon = (status: string) => ({
+  RESOLVED: "✓",
+  STILL_OPEN: "⚠",
+  MOVED: "↔",
+  FAILED_TO_VERIFY: "✕",
+}[status] || "•");
 
 export default function ReviewDetail() {
   const { id } = useParams();
@@ -590,19 +622,50 @@ export default function ReviewDetail() {
               <div className="fix-tracker__grid">
                 <div className="meta-item"><span className="meta-label">Resolved</span><span className="meta-value">{commit.resolved_issue_count}</span></div>
                 <div className="meta-item"><span className="meta-label">Still open</span><span className="meta-value">{commit.remaining_issue_count}</span></div>
+                <div className="meta-item"><span className="meta-label">Moved</span><span className="meta-value">{commit.moved_issue_count}</span></div>
+                <div className="meta-item"><span className="meta-label">New</span><span className="meta-value">{commit.new_issue_count}</span></div>
                 <div className="meta-item"><span className="meta-label">Skipped</span><span className="meta-value">{commit.skipped_issue_count}</span></div>
                 <div className="meta-item"><span className="meta-label">Failed</span><span className="meta-value">{commit.failed_issue_count}</span></div>
               </div>
+              {commit.verification_completed_at && (
+                <p className="muted">
+                  Verification completed {new Date(commit.verification_completed_at).toLocaleString()}
+                </p>
+              )}
               {commit.issues.length > 0 && (
-                <ul className="fix-errors">
+                <ul className="fix-verification-list">
                   {commit.issues.map((issue) => (
                     <li key={issue.issue_id}>
-                      Issue #{issue.issue_id}: {fixIssueStatusLabel(issue.status)}
+                      <span className={`verification-state verification-state--${issue.status.toLowerCase()}`}>
+                        {fixIssueStatusIcon(issue.status)} {fixIssueStatusLabel(issue.status)}
+                      </span>
+                      <span>Issue #{issue.issue_id}</span>
+                      {(issue.original_file || issue.current_file) && (
+                        <span className="verification-location">
+                          {issue.original_file || "unknown"}
+                          {issue.original_line ? `:${issue.original_line}` : ""}
+                          {issue.status === "MOVED" && (
+                            <> → {issue.current_file || "unknown"}{issue.current_line ? `:${issue.current_line}` : ""}</>
+                          )}
+                        </span>
+                      )}
                       {issue.skip_reason ? ` — ${issue.skip_reason}` : ""}
                       {issue.failure_reason ? ` — ${issue.failure_reason}` : ""}
                     </li>
                   ))}
                 </ul>
+              )}
+              {commit.new_issues.length > 0 && (
+                <div className="fix-new-issues">
+                  <strong>New issues found after the AI commit</strong>
+                  <ul>
+                    {commit.new_issues.map((issue) => (
+                      <li key={issue.id}>
+                        {issue.file || "unknown"}{issue.line ? `:${issue.line}` : ""} — {issue.comment}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
               {commit.failure_reason && <p className="fix-invalid">{commit.failure_reason}</p>}
               {commit.commit_message && (

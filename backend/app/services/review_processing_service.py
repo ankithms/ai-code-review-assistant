@@ -35,6 +35,7 @@ from app.schemas.output import PullRequestSchema
 from app.services.diff_line_mapper import MultiFileDiffLineMapper
 from app.services.fix_commit_tracking_service import FixCommitTrackingService
 from app.services.inline_comment_validator import InlineCommentValidator
+from app.services.issue_matching_service import IssueMatchingService, rename_map_from_files
 from app.services.review_context_builder import ReviewContextBuilder
 from app.services.suggestion_eligibility_service import (
     LARGE_FIX_FALLBACK_MESSAGE,
@@ -141,7 +142,7 @@ def _process_pull_request_review(db, job) -> None:
             current_head_sha=(pull_request.get("head") or {}).get("sha"),
             access_token=token,
         )
-        _complete_fix_commit_review(db, job, existing_review, None)
+        _complete_fix_commit_review(db, job, existing_review, None, files)
         return
 
     pull_request = get_pull_request(
@@ -178,12 +179,6 @@ def _process_pull_request_review(db, job) -> None:
             "Skipping AI review for job %s because there are no reviewable changed files",
             job.id,
         )
-        _reconcile_direct_fix_commit_issues(
-            db=db,
-            pull_request_id=_persisted_id(pull_request_record),
-            commit_sha=job.commit_sha,
-            new_issues=[],
-        )
         saved_review = save_review(
             db=db,
             pr_data=pr_schema,
@@ -193,7 +188,7 @@ def _process_pull_request_review(db, job) -> None:
             ),
             commit_sha=job.commit_sha,
         )
-        _complete_fix_commit_review(db, job, saved_review, [])
+        _complete_fix_commit_review(db, job, saved_review, [], files)
         return
 
     logger.info("Calling AI review service for job %s", job.id)
@@ -248,13 +243,6 @@ def _process_pull_request_review(db, job) -> None:
         len(ai_review.issues),
     )
 
-    _reconcile_direct_fix_commit_issues(
-        db=db,
-        pull_request_id=_persisted_id(pull_request_record),
-        commit_sha=job.commit_sha,
-        new_issues=ai_review.issues,
-    )
-
     previous_review = get_latest_review_for_pull_request(
         db=db,
         github_pr_id=pull_request["id"],
@@ -293,7 +281,7 @@ def _process_pull_request_review(db, job) -> None:
             review_data=_review_with_issues(ai_review, []),
             commit_sha=job.commit_sha,
         )
-        _complete_fix_commit_review(db, job, saved_review, ai_review.issues)
+        _complete_fix_commit_review(db, job, saved_review, ai_review.issues, files)
         return
 
     _post_github_comments(
@@ -313,7 +301,7 @@ def _process_pull_request_review(db, job) -> None:
         review_data=_review_with_issues(ai_review, issues_to_post),
         commit_sha=job.commit_sha,
     )
-    _complete_fix_commit_review(db, job, saved_review, ai_review.issues)
+    _complete_fix_commit_review(db, job, saved_review, ai_review.issues, files)
 
 
 def _build_diff(files: list[dict]) -> str:
@@ -465,7 +453,7 @@ def _reconcile_direct_fix_commit_issues(
     return resolved_count
 
 
-def _complete_fix_commit_review(db, job, saved_review: Review, new_issues) -> None:
+def _complete_fix_commit_review(db, job, saved_review: Review, new_issues, files=None) -> None:
     fix_commit = None
     fix_commit_id = getattr(job, "fix_commit_id", None)
     if fix_commit_id is not None:
@@ -480,11 +468,17 @@ def _complete_fix_commit_review(db, job, saved_review: Review, new_issues) -> No
         return
 
     if new_issues is None:
-        new_issues = [
-            link.issue
-            for link in fix_commit.issue_links
-            if link.committed and link.issue.status == IssueStatus.OPEN.value
-        ]
+        # The review was already saved by a prior attempt, but duplicate findings
+        # may intentionally not have been persisted. Preserve uncertainty instead
+        # of treating their absence as proof that the fix worked.
+        fix_commit.follow_up_review = saved_review
+        db.commit()
+        FixCommitTrackingService().record_review_failure(
+            db,
+            fix_commit.id,
+            "Persisted review was recovered without its complete finding set",
+        )
+        return
 
     FixCommitTrackingService().complete_review(
         db,
@@ -492,6 +486,7 @@ def _complete_fix_commit_review(db, job, saved_review: Review, new_issues) -> No
         review=saved_review,
         new_issues=new_issues,
         issues_match=_issues_match,
+        rename_map=rename_map_from_files(files or []),
     )
 
 
@@ -569,83 +564,7 @@ def _is_duplicate_issue(issue, previous_issues) -> bool:
 
 
 def _issues_match(issue, previous_issue) -> bool:
-    if _normalize_path(issue.file) != _normalize_path(previous_issue.file):
-        return False
-
-    if _enum_value(issue.category) != _enum_value(previous_issue.category):
-        return False
-
-    similarity = _issue_text_similarity(issue, previous_issue)
-
-    if _lines_are_nearby(issue.line, previous_issue.line):
-        return similarity >= 0.55
-
-    return similarity >= 0.82
-
-
-def _issue_text_similarity(issue, previous_issue) -> float:
-    issue_text = _issue_root_cause_text(issue)
-    previous_text = _issue_root_cause_text(previous_issue)
-    issue_tokens = _tokenize_for_similarity(issue_text)
-    previous_tokens = _tokenize_for_similarity(previous_text)
-
-    if not issue_tokens or not previous_tokens:
-        return 0
-
-    return len(issue_tokens & previous_tokens) / len(issue_tokens | previous_tokens)
-
-
-def _issue_root_cause_text(issue) -> str:
-    problem, _, impact, _ = _split_issue_comment_sections(issue.comment)
-    structured_impact = getattr(issue, "impact", None)
-    if structured_impact:
-        impact = structured_impact
-
-    return " ".join(part for part in (problem, impact) if part)
-
-
-def _tokenize_for_similarity(text: str) -> set[str]:
-    stop_words = {
-        "a",
-        "an",
-        "and",
-        "are",
-        "as",
-        "be",
-        "because",
-        "being",
-        "by",
-        "can",
-        "for",
-        "from",
-        "in",
-        "is",
-        "it",
-        "of",
-        "or",
-        "that",
-        "the",
-        "this",
-        "to",
-        "will",
-        "with",
-    }
-    tokens = set(re.findall(r"[a-z0-9_]+", text.lower()))
-    return {token for token in tokens if len(token) > 2 and token not in stop_words}
-
-
-def _lines_are_nearby(line, previous_line) -> bool:
-    if line is None or previous_line is None:
-        return False
-
-    return abs(line - previous_line) <= 8
-
-
-def _normalize_path(file_path: str | None) -> str:
-    if not file_path:
-        return ""
-
-    return file_path.replace("\\", "/").lstrip("/")
+    return IssueMatchingService().matches(issue, previous_issue)
 
 
 def _get_file_entry_for_issue(

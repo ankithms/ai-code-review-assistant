@@ -8,6 +8,7 @@ from app.db.models import (
     PullRequest,
     Review,
     Issue,
+    IssueTimelineEvent,
 )
 from app.repositories.repository_repository import get_or_create_repository
 
@@ -18,6 +19,7 @@ from app.schemas.output import (
     PullRequestSchema,
     ReviewResponseSchema,
 )
+from app.services.issue_matching_service import IssueMatchingService
 
 
 def save_review(
@@ -95,8 +97,16 @@ def save_review(
             github_review_id=issue_data.github_review_id,
             status=IssueStatus.OPEN.value,
         )
-
         db.add(issue)
+        db.flush()
+        issue.fingerprint = IssueMatchingService().fingerprint(issue)
+        db.add(
+            IssueTimelineEvent(
+                issue_id=issue.id,
+                event="DETECTED",
+                details=f"review {review.id}",
+            )
+        )
 
     db.commit()
     db.refresh(review)
@@ -126,6 +136,8 @@ def get_review_by_id_for_repository(
             joinedload(Review.fix_pull_requests).joinedload(FixPullRequest.issues),
             joinedload(Review.fix_commits).joinedload(FixCommit.issues),
             joinedload(Review.fix_commits).joinedload(FixCommit.issue_links),
+            joinedload(Review.fix_commits).joinedload(FixCommit.new_issues),
+            joinedload(Review.issues).joinedload(Issue.timeline_events),
             joinedload(Review.fix_commits).joinedload(FixCommit.follow_up_review),
             joinedload(Review.pull_request),
         )
@@ -251,6 +263,14 @@ def update_issue_status(
     else:
         issue.resolved_at = None
         issue.resolved_by = None
+
+    db.add(
+        IssueTimelineEvent(
+            issue_id=issue.id,
+            event=resolved_status.value,
+            details="manual status update",
+        )
+    )
 
     db.commit()
     db.refresh(issue)

@@ -137,6 +137,11 @@ class Issue(Base):
     __tablename__ = "issues"
 
     id = Column(Integer, primary_key=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
 
     review_id = Column(
         Integer,
@@ -176,6 +181,13 @@ class Issue(Base):
     github_review_id = Column(BigInteger)
     resolved_at = Column(DateTime(timezone=True))
     resolved_by = Column(String(255))
+    fingerprint = Column(String(64), index=True)
+    introduced_by_fix_commit_id = Column(
+        Integer,
+        ForeignKey("fix_commits.id"),
+        nullable=True,
+        index=True,
+    )
     status = Column(
         String(20),
         nullable=False,
@@ -209,6 +221,19 @@ class Issue(Base):
         foreign_keys="FixCommitIssue.issue_id",
         cascade="all, delete-orphan",
         overlaps="fix_commits,issues",
+    )
+
+    timeline_events = relationship(
+        "IssueTimelineEvent",
+        back_populates="issue",
+        cascade="all, delete-orphan",
+        order_by="IssueTimelineEvent.created_at, IssueTimelineEvent.id",
+    )
+
+    introduced_by_fix_commit = relationship(
+        "FixCommit",
+        back_populates="new_issues",
+        foreign_keys=[introduced_by_fix_commit_id],
     )
 
     @property
@@ -364,6 +389,8 @@ class FixCommit(Base):
     )
     committed_at = Column(DateTime(timezone=True))
     reviewed_at = Column(DateTime(timezone=True))
+    verification_completed_at = Column(DateTime(timezone=True))
+    verification_summary = Column(Text)
     created_by = Column(String(255))
     generated_commit_sha = Column(String, unique=True, index=True)
     generated_commit_url = Column(Text)
@@ -386,6 +413,8 @@ class FixCommit(Base):
     skipped_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
     resolved_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
     remaining_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    moved_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
+    new_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
     failed_issue_count = Column(Integer, nullable=False, default=0, server_default="0")
     applied_issue_ids = Column(Text, nullable=False, default="[]", server_default="[]")
     pull_request_url = Column(Text)
@@ -428,6 +457,11 @@ class FixCommit(Base):
         uselist=False,
     )
     review_jobs = relationship("ReviewJob", back_populates="fix_commit")
+    new_issues = relationship(
+        "Issue",
+        back_populates="introduced_by_fix_commit",
+        foreign_keys="Issue.introduced_by_fix_commit_id",
+    )
 
     @property
     def repository(self):
@@ -470,6 +504,12 @@ class FixCommitIssue(Base):
     validated = Column(Boolean, nullable=False, default=False, server_default="false")
     committed = Column(Boolean, nullable=False, default=False, server_default="false")
     resolution_status = Column(String(30))
+    original_file = Column(String(255))
+    original_line = Column(Integer)
+    current_file = Column(String(255))
+    current_line = Column(Integer)
+    match_confidence = Column(String(20))
+    match_reason = Column(Text)
     skip_reason = Column(Text)
     failure_reason = Column(Text)
     created_at = Column(
@@ -496,6 +536,36 @@ class FixCommitIssue(Base):
         overlaps="issues,fix_commits",
     )
     current_issue = relationship("Issue", foreign_keys=[current_issue_id])
+
+    @property
+    def timeline(self):
+        return [
+            event
+            for event in (self.issue.timeline_events if self.issue is not None else [])
+            if event.fix_commit_id in {None, self.fix_commit_id}
+        ]
+
+
+class IssueTimelineEvent(Base):
+    __tablename__ = "issue_timeline_events"
+    __table_args__ = (
+        Index("ix_issue_timeline_events_issue_id", "issue_id"),
+        Index("ix_issue_timeline_events_fix_commit_id", "fix_commit_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    issue_id = Column(Integer, ForeignKey("issues.id"), nullable=False)
+    fix_commit_id = Column(Integer, ForeignKey("fix_commits.id"), nullable=True)
+    event = Column(String(40), nullable=False)
+    details = Column(Text)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+    issue = relationship("Issue", back_populates="timeline_events")
+    fix_commit = relationship("FixCommit")
 
 
 class FixPullRequest(Base):

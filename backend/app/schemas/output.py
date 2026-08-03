@@ -54,6 +54,8 @@ class FixCommitIssueStatus(str, Enum):
     COMMITTED = "COMMITTED"
     RESOLVED = "RESOLVED"
     STILL_OPEN = "STILL_OPEN"
+    MOVED = "MOVED"
+    FAILED_TO_VERIFY = "FAILED_TO_VERIFY"
     FAILED = "FAILED"
 
 

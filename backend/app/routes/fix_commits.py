@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
-from app.db.models import FixCommit
+from app.db.models import FixCommit, FixCommitIssue, Issue
 from app.db.session import get_db
 from app.routes.fixes import _fix_commit_response
 from app.schemas.fixes import FixCommitResponse
@@ -48,6 +48,10 @@ def _fix_commit_query(db: Session, repository_id: int):
         db.query(FixCommit)
         .options(
             joinedload(FixCommit.issue_links),
+            joinedload(FixCommit.issue_links)
+            .joinedload(FixCommitIssue.issue)
+            .joinedload(Issue.timeline_events),
+            joinedload(FixCommit.new_issues),
             joinedload(FixCommit.follow_up_review),
             joinedload(FixCommit.pull_request),
         )

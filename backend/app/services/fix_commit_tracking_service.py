@@ -1,18 +1,20 @@
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.db.models import FixCommit, FixCommitIssue, Issue, Review
+from app.db.models import FixCommit, FixCommitIssue, Issue, IssueTimelineEvent, Review
 from app.schemas.output import (
     FixCommitIssueStatus,
     FixCommitStatus,
     IssueFixStatus,
     IssueStatus,
 )
+from app.services.issue_matching_service import IssueMatchingService
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,7 @@ class FixCommitTrackingService:
         retry: bool = False,
     ) -> tuple[FixCommit, bool]:
         issue_ids = sorted(issue.id for issue in issues)
+        issue_by_id = {issue.id: issue for issue in issues}
         identity = self.identity(
             repository_id=repository_id,
             pull_request_id=pull_request_id,
@@ -116,12 +119,32 @@ class FixCommitTrackingService:
                 FixCommitIssue(
                     issue_id=issue_id,
                     status=FixCommitIssueStatus.REQUESTED.value,
+                    original_file=issue_by_id[issue_id].file,
+                    original_line=issue_by_id[issue_id].line,
                 )
                 for issue_id in issue_ids
             ],
         )
         db.add(record)
         try:
+            db.flush()
+            matcher = IssueMatchingService()
+            for issue in issues:
+                issue.fingerprint = issue.fingerprint or matcher.fingerprint(issue)
+                if not any(event.event == "DETECTED" for event in issue.timeline_events):
+                    self._add_timeline_event(
+                        db,
+                        issue=issue,
+                        fix_commit_id=record.id,
+                        event="DETECTED",
+                        created_at=issue.created_at,
+                    )
+                self._add_timeline_event(
+                    db,
+                    issue=issue,
+                    fix_commit_id=record.id,
+                    event="SELECTED_FOR_AI_FIX",
+                )
             db.commit()
         except IntegrityError:
             db.rollback()
@@ -236,11 +259,24 @@ class FixCommitTrackingService:
                 link.validated = True
                 link.status = FixCommitIssueStatus.VALIDATED.value
                 link.skip_reason = None
+                self._add_timeline_event(
+                    db,
+                    issue=link.issue,
+                    fix_commit_id=record.id,
+                    event="VALIDATED",
+                )
             elif link.issue_id in excluded:
                 link.validated = False
                 link.status = FixCommitIssueStatus.SKIPPED.value
                 reasons = per_issue_errors.get(link.issue_id) or ["Generated edit failed validation"]
                 link.skip_reason = "; ".join(reasons)[:2000]
+                self._add_timeline_event(
+                    db,
+                    issue=link.issue,
+                    fix_commit_id=record.id,
+                    event="VALIDATION_SKIPPED",
+                    details=link.skip_reason,
+                )
             db.add(link)
 
         record.skipped_issue_count = len(excluded)
@@ -297,6 +333,13 @@ class FixCommitTrackingService:
                 issue = link.issue
                 if issue is not None:
                     issue.fix_status = IssueFixStatus.FIX_COMMITTED.value
+                    self._add_timeline_event(
+                        db,
+                        issue=issue,
+                        fix_commit_id=record.id,
+                        event="COMMITTED",
+                        details=result.commit_sha,
+                    )
                     db.add(issue)
             db.add(link)
         record.valid_issue_count = sum(link.committed for link in record.issue_links)
@@ -400,52 +443,149 @@ class FixCommitTrackingService:
         record: FixCommit,
         review: Review,
         new_issues,
-        issues_match,
+        issues_match=None,
+        rename_map: dict[str, str] | None = None,
     ) -> FixCommit:
         now = datetime.now(UTC)
         review.fix_commit_id = record.id
         record.status = FixCommitStatus.REVIEWED.value
         record.reviewed_at = now
+        record.verification_completed_at = now
         record.failure_reason = None
         record.updated_at = now
         db.add_all([record, review])
-        db.commit()
-        db.refresh(record)
+        db.flush()
 
-        resolved_count = 0
-        remaining_count = 0
+        matcher = IssueMatchingService()
+        current_issues = list(new_issues or [])
+        committed_links = [link for link in record.issue_links if link.committed]
+        original_issues = [link.issue for link in committed_links if link.issue is not None]
+        counts = {
+            FixCommitIssueStatus.RESOLVED.value: 0,
+            FixCommitIssueStatus.STILL_OPEN.value: 0,
+            FixCommitIssueStatus.MOVED.value: 0,
+            FixCommitIssueStatus.FAILED_TO_VERIFY.value: 0,
+        }
 
-        for link in record.issue_links:
-            if not link.committed:
-                continue
+        for link in committed_links:
             issue = link.issue
-            recurring = next(
-                (new_issue for new_issue in new_issues if issues_match(new_issue, issue)),
-                None,
+            current, evidence = matcher.best_match(
+                issue,
+                current_issues,
+                rename_map=rename_map,
             )
+            if (
+                issues_match is not None
+                and (evidence is None or evidence.confidence == "NONE")
+            ):
+                legacy_current = next(
+                    (
+                        candidate
+                        for candidate in current_issues
+                        if issues_match(candidate, issue)
+                    ),
+                    None,
+                )
+                if legacy_current is not None:
+                    current = legacy_current
+                    evidence = replace(
+                        matcher.compare(current, issue, rename_map=rename_map),
+                        confidence="MEDIUM",
+                        score=0.5,
+                    )
             issue.fix_status = IssueFixStatus.FIX_COMMITTED.value
-            if recurring is None:
-                link.status = FixCommitIssueStatus.RESOLVED.value
-                link.resolution_status = FixCommitIssueStatus.RESOLVED.value
+            link.original_file = link.original_file or issue.file
+            link.original_line = link.original_line if link.original_line is not None else issue.line
+            link.current_issue_id = None
+            link.current_file = getattr(current, "file", None) if current is not None else None
+            link.current_line = getattr(current, "line", None) if current is not None else None
+            link.match_confidence = evidence.confidence if evidence is not None else "NONE"
+            link.match_reason = evidence.reason if evidence is not None else "no candidate finding"
+            self._add_timeline_event(
+                db,
+                issue=issue,
+                fix_commit_id=record.id,
+                event="RE_REVIEWED",
+                details=f"review {review.id}",
+            )
+
+            if evidence is None or evidence.confidence == "NONE":
+                resolution = FixCommitIssueStatus.RESOLVED
                 issue.status = IssueStatus.RESOLVED.value
                 issue.resolved_at = issue.resolved_at or now
                 issue.resolved_by = f"AI Fix Commit {record.generated_commit_sha[:7]}"
-                resolved_count += 1
-            else:
-                link.status = FixCommitIssueStatus.STILL_OPEN.value
-                link.resolution_status = FixCommitIssueStatus.STILL_OPEN.value
-                link.current_issue_id = issue.id
+            elif evidence.confidence == "LOW":
+                resolution = FixCommitIssueStatus.FAILED_TO_VERIFY
                 issue.status = IssueStatus.OPEN.value
                 issue.resolved_at = None
                 issue.resolved_by = None
-                remaining_count += 1
+            elif evidence.moved:
+                resolution = FixCommitIssueStatus.MOVED
+                issue.status = IssueStatus.OPEN.value
+                issue.resolved_at = None
+                issue.resolved_by = None
+            else:
+                resolution = FixCommitIssueStatus.STILL_OPEN
+                issue.status = IssueStatus.OPEN.value
+                issue.resolved_at = None
+                issue.resolved_by = None
+
+            persisted_current = self._find_persisted_current_issue(
+                matcher,
+                review.issues,
+                current,
+                rename_map=rename_map,
+            )
+            if persisted_current is not None:
+                link.current_issue_id = persisted_current.id
+            link.status = resolution.value
+            link.resolution_status = resolution.value
+            counts[resolution.value] += 1
+            self._add_timeline_event(
+                db,
+                issue=issue,
+                fix_commit_id=record.id,
+                event=resolution.value,
+                details=link.match_reason,
+            )
             db.add_all([link, issue])
 
+        new_persisted_issues = []
+        for persisted_issue in review.issues:
+            if any(
+                matcher.compare(persisted_issue, original, rename_map=rename_map).is_confident
+                for original in original_issues
+            ):
+                continue
+            persisted_issue.introduced_by_fix_commit_id = record.id
+            persisted_issue.fingerprint = persisted_issue.fingerprint or matcher.fingerprint(
+                persisted_issue
+            )
+            new_persisted_issues.append(persisted_issue)
+            db.add(persisted_issue)
+
+        resolved_count = counts[FixCommitIssueStatus.RESOLVED.value]
+        still_open_count = counts[FixCommitIssueStatus.STILL_OPEN.value]
+        moved_count = counts[FixCommitIssueStatus.MOVED.value]
+        failed_count = counts[FixCommitIssueStatus.FAILED_TO_VERIFY.value]
         record.resolved_issue_count = resolved_count
-        record.remaining_issue_count = remaining_count
+        record.remaining_issue_count = still_open_count
+        record.moved_issue_count = moved_count
+        record.new_issue_count = len(new_persisted_issues)
+        record.failed_issue_count = failed_count
+        record.verification_summary = json.dumps(
+            {
+                "resolved": resolved_count,
+                "still_open": still_open_count,
+                "moved": moved_count,
+                "failed_to_verify": failed_count,
+                "new": record.new_issue_count,
+            },
+            sort_keys=True,
+        )
         if record.valid_issue_count and resolved_count == record.valid_issue_count:
             record.status = FixCommitStatus.RESOLVED.value
-        elif resolved_count and remaining_count:
+        elif resolved_count and (record.remaining_issue_count or moved_count or failed_count):
             record.status = FixCommitStatus.PARTIALLY_RESOLVED.value
         else:
             record.status = FixCommitStatus.REVIEWED.value
@@ -461,8 +601,87 @@ class FixCommitTrackingService:
             return
         record.status = FixCommitStatus.REVIEW_PENDING.value
         record.failure_reason = f"Follow-up review failed: {self._concise(reason)}"
+        record.failed_issue_count = 0
+        for link in record.issue_links:
+            if not link.committed:
+                continue
+            link.status = FixCommitIssueStatus.FAILED_TO_VERIFY.value
+            link.resolution_status = FixCommitIssueStatus.FAILED_TO_VERIFY.value
+            link.match_confidence = "NONE"
+            link.match_reason = record.failure_reason
+            record.failed_issue_count += 1
+            self._add_timeline_event(
+                db,
+                issue=link.issue,
+                fix_commit_id=record.id,
+                event=FixCommitIssueStatus.FAILED_TO_VERIFY.value,
+                details=record.failure_reason,
+            )
+            db.add(link)
+        record.verification_summary = json.dumps(
+            {
+                "resolved": 0,
+                "still_open": 0,
+                "moved": 0,
+                "failed_to_verify": record.failed_issue_count,
+                "new": 0,
+            },
+            sort_keys=True,
+        )
         record.updated_at = datetime.now(UTC)
         db.commit()
+
+    @staticmethod
+    def _find_persisted_current_issue(
+        matcher: IssueMatchingService,
+        persisted_issues,
+        current,
+        *,
+        rename_map: dict[str, str] | None,
+    ) -> Issue | None:
+        if current is None:
+            return None
+        for persisted in persisted_issues:
+            if persisted is current or matcher.compare(
+                persisted,
+                current,
+                rename_map=rename_map,
+            ).is_confident:
+                return persisted
+        return None
+
+    @staticmethod
+    def _add_timeline_event(
+        db: Session,
+        *,
+        issue: Issue | None,
+        fix_commit_id: int,
+        event: str,
+        details: str | None = None,
+        created_at=None,
+    ) -> None:
+        if issue is None:
+            return
+        existing = (
+            db.query(IssueTimelineEvent.id)
+            .filter(
+                IssueTimelineEvent.issue_id == issue.id,
+                IssueTimelineEvent.fix_commit_id == fix_commit_id,
+                IssueTimelineEvent.event == event,
+            )
+            .first()
+        )
+        if existing is not None:
+            return
+        db.add(
+            IssueTimelineEvent(
+                issue_id=issue.id,
+                fix_commit_id=fix_commit_id,
+                event=event,
+                details=details,
+                created_at=created_at or datetime.now(UTC),
+            )
+        )
 
     @staticmethod
     def _concise(reason: str) -> str:
