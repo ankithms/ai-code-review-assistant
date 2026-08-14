@@ -177,6 +177,10 @@ def _run_fix_command(
         source_head_sha=target_head_sha,
         source_branch=pull_request["head"]["ref"],
         requested_by=commenter,
+        # Posting a new command is an explicit user retry. The tracking service
+        # still deduplicates active/successful requests, but creates a new attempt
+        # when the latest identical request is FAILED or STALE.
+        retry=True,
     )
     if not created:
         if fix_commit.generated_commit_sha:

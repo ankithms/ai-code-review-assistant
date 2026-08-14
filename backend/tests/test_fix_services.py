@@ -886,6 +886,64 @@ class GitCommitServiceTests(unittest.TestCase):
 
 
 class GithubNativeFixServiceTests(unittest.TestCase):
+    def test_new_ai_fix_command_passes_explicit_retry_to_tracking(self):
+        issue = SimpleNamespace(id=10)
+        review = SimpleNamespace(id=20)
+        pull_request_record = SimpleNamespace(id=30, repository_id=40)
+        pull_request = {
+            "head": {"sha": "head-sha", "ref": "feature"},
+        }
+        existing = SimpleNamespace(
+            status="GENERATING",
+            generated_commit_sha=None,
+        )
+        tracking = Mock()
+        tracking.create_or_get.return_value = (existing, False)
+
+        with (
+            patch.object(
+                github_native_fix_service,
+                "_get_pull_request_record",
+                return_value=pull_request_record,
+            ),
+            patch.object(
+                github_native_fix_service,
+                "get_latest_review_for_pull_request",
+                return_value=review,
+            ),
+            patch.object(
+                github_native_fix_service,
+                "_select_command_issues",
+                return_value=[issue],
+            ),
+            patch.object(github_native_fix_service, "_validate_issues_eligible_for_fix"),
+            patch.object(
+                github_native_fix_service,
+                "_github_pull_request",
+                return_value=pull_request,
+            ),
+            patch.object(
+                github_native_fix_service.GitCommitService,
+                "validate_direct_commit_target",
+            ),
+            patch.object(
+                github_native_fix_service,
+                "FixCommitTrackingService",
+                return_value=tracking,
+            ),
+        ):
+            message = github_native_fix_service._run_fix_command(
+                db=Mock(),
+                repository="owner/repo",
+                pull_request_number=42,
+                command=github_native_fix_service.NativeFixCommand(target="all"),
+                access_token="token",
+                payload={"comment": {"user": {"login": "developer"}}},
+            )
+
+        self.assertIn("already being tracked", message)
+        self.assertTrue(tracking.create_or_get.call_args.kwargs["retry"])
+
     def test_temporary_ai_failure_posts_retry_later_response(self):
         payload = {
             "repository": {"full_name": "owner/repo"},
