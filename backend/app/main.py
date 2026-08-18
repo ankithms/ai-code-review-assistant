@@ -1,4 +1,5 @@
 import logging
+import os
 from fastapi import FastAPI
 from app.routes.auth import router as auth_router
 from app.routes.webhook import router as webhook_router
@@ -9,6 +10,20 @@ from app.routes.fixes import router as fixes_router
 from app.routes.fix_commits import router as fix_commits_router
 from app.routes.repositories import router as repositories_router
 from fastapi.middleware.cors import CORSMiddleware
+
+
+def _cors_allowed_origins() -> list[str]:
+    configured_origins = os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:5173,http://localhost:3000",
+    )
+    origins = [
+        origin.strip().rstrip("/")
+        for origin in configured_origins.split(",")
+        if origin.strip()
+    ]
+    return origins or ["http://localhost:5173", "http://localhost:3000"]
+
 
 # Configure logging
 logging.basicConfig(
@@ -23,9 +38,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173"
-    ],
+    allow_origins=_cors_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

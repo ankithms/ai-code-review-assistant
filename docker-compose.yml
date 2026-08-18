@@ -1,4 +1,15 @@
 services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
   backend:
     build:
       context: ./backend
@@ -6,20 +17,47 @@ services:
       - ./backend/.env
     ports:
       - "8000:8000"
-    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    environment:
+      CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:3000
+    command:
+      [
+        "sh",
+        "-c",
+        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB}\"; export REDIS_URL=\"redis://redis:6379/0\"; alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000",
+      ]
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   worker:
     build:
       context: ./backend
     env_file:
       - ./backend/.env
-    command: ["dramatiq", "app.tasks.review_tasks"]
+    command:
+      [
+        "sh",
+        "-c",
+        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB}\"; export REDIS_URL=\"redis://redis:6379/0\"; exec dramatiq app.tasks.review_tasks",
+      ]
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   postgres:
     image: postgres:16
@@ -29,11 +67,21 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -42,7 +90,8 @@ services:
     ports:
       - "5050:80"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     volumes:
       - pgadmin_data:/var/lib/pgadmin
 

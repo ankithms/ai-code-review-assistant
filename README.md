@@ -1,5 +1,7 @@
 # AI Code Review Assistant
 
+[![CI](https://github.com/ankithms/ai-code-review-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/ankithms/ai-code-review-assistant/actions/workflows/ci.yml)
+
 An AI-powered developer tool that automatically reviews GitHub pull requests, analyzes code diffs using Google's Gemini models, identifies potential bugs, security vulnerabilities, performance concerns, and code quality issues, then posts structured review feedback directly on the pull request.
 
 ## Features
@@ -59,6 +61,14 @@ GITHUB_WEBHOOK_SECRET=...
 GOOGLE_API_KEY=...
 # Optional hard deadline for one Gemini review/fix invocation.
 AI_MODEL_DEADLINE_SECONDS=120
+# Comma-separated browser origins allowed to call FastAPI directly.
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+```
+
+Start from the checked-in template and replace all placeholder credentials:
+
+```bash
+cp backend/.env.example backend/.env
 ```
 
 ## Local Development
@@ -90,6 +100,36 @@ Or run the full stack with Docker Compose:
 ```bash
 docker compose up --build
 ```
+
+The dashboard is then available at `http://localhost:3000`. Nginx serves the
+single-page application and proxies `/api` requests to FastAPI; the backend is
+also exposed directly at `http://localhost:8000` for webhook delivery and API
+development.
+
+Run and validate the frontend:
+
+```bash
+cd frontend
+pnpm install
+pnpm run dev
+
+# In a validation terminal
+pnpm run test
+pnpm run lint
+pnpm run build
+```
+
+The Vite development server uses `/api` and proxies it to
+`VITE_DEV_API_TARGET`, which defaults to `http://localhost:8000`. Set
+`VITE_API_BASE_URL` only when the browser must call a different public API URL.
+
+## Continuous Integration
+
+GitHub Actions runs on pull requests and pushes to `main`. The workflow installs
+dependencies from the committed lockfiles, runs all backend tests, runs frontend
+tests and lint, builds the production frontend, validates Docker Compose, and
+builds the backend and frontend images. Live E2E tests remain opt-in and never
+run in CI because they require explicit confirmation and real credentials.
 
 ## End-to-End Test
 
@@ -128,3 +168,17 @@ bash backend/scripts/run_live_e2e.sh
 The runner refuses to start without the exact repository, pull-request number,
 and confirmation value. Real comments created by the test are intentionally
 left on the sandbox pull request as an audit trail.
+
+If a disposable fixture PR does not exist, repository owners can provision one
+with the configured GitHub token:
+
+```bash
+cd backend
+LIVE_E2E_REPOSITORY=owner/sandbox \
+LIVE_E2E_CONFIRM=provision-fixture \
+uv run python scripts/provision_live_e2e_fixture.py
+```
+
+The provisioner refuses to overwrite its `e2e/live-review-fixture` branch. The
+created PR is a draft and must never be merged because its defects are
+intentional.
