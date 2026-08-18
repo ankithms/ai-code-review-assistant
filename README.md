@@ -108,3 +108,23 @@ The runner starts isolated PostgreSQL and Redis containers, validates webhook
 signature rejection, submits a signed pull-request webhook, waits for the
 asynchronous review, checks the review and analytics APIs, verifies duplicate
 delivery handling, and removes the E2E containers and volumes when it finishes.
+
+### Live sandbox test
+
+The live test uses the configured GitHub and Gemini credentials and posts real
+review comments. It only accepts an open pull request whose title contains
+`E2E` or whose source branch begins with `e2e/`. The pull request should include
+an intentional reviewable issue so inline-comment behavior can be verified.
+
+Run it only against a disposable sandbox pull request:
+
+```bash
+LIVE_E2E_REPOSITORY=owner/sandbox \
+LIVE_E2E_PR_NUMBER=123 \
+LIVE_E2E_CONFIRM=post-comments \
+bash backend/scripts/run_live_e2e.sh
+```
+
+The runner refuses to start without the exact repository, pull-request number,
+and confirmation value. Real comments created by the test are intentionally
+left on the sandbox pull request as an audit trail.
