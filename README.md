@@ -90,3 +90,21 @@ Or run the full stack with Docker Compose:
 ```bash
 docker compose up --build
 ```
+
+## End-to-End Test
+
+The isolated E2E stack exercises the real FastAPI endpoint, Alembic migrations,
+PostgreSQL database, Redis queue, and a separate Dramatiq worker process. GitHub
+and Gemini are replaced with deterministic test doubles, so the test never
+changes a real repository or consumes model quota.
+
+Run it from the repository root:
+
+```bash
+bash backend/scripts/run_e2e.sh
+```
+
+The runner starts isolated PostgreSQL and Redis containers, validates webhook
+signature rejection, submits a signed pull-request webhook, waits for the
+asynchronous review, checks the review and analytics APIs, verifies duplicate
+delivery handling, and removes the E2E containers and volumes when it finishes.

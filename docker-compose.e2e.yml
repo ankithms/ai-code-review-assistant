@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16
+    pull_policy: missing
+    environment:
+      POSTGRES_DB: code_review_e2e
+      POSTGRES_USER: code_review_e2e
+      POSTGRES_PASSWORD: code_review_e2e
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U code_review_e2e -d code_review_e2e"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7
+    pull_policy: missing
+    ports:
+      - "127.0.0.1:56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
