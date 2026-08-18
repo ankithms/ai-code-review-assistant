@@ -160,7 +160,10 @@ class FixCommitResponse(BaseModel):
     moved_issue_count: int = 0
     new_issue_count: int = 0
     failed_issue_count: int = 0
-    issues: list[FixCommitIssueResponse] = Field(default_factory=list)
+    issues: list[FixCommitIssueResponse] = Field(
+        default_factory=list,
+        validation_alias="issue_links",
+    )
     resolved_issues: list[FixCommitIssueResponse] = Field(default_factory=list)
     remaining_issues: list[FixCommitIssueResponse] = Field(default_factory=list)
     moved_issues: list[FixCommitIssueResponse] = Field(default_factory=list)
@@ -188,7 +191,8 @@ class FixCommitResponse(BaseModel):
         return value
 
     model_config = {
-        "from_attributes": True
+        "from_attributes": True,
+        "populate_by_name": True,
     }
 
 

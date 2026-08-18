@@ -13,6 +13,7 @@ from app.routes import webhook
 from app.routes.fix_commits import get_fix_commit, get_pull_request_fix_commits
 from app.routes.fixes import _fix_commit_response
 from app.schemas.output import FixCommitIssueStatus, FixCommitStatus, IssueStatus
+from app.schemas.responses import ReviewDetailResponse
 from app.services.fix_commit_tracking_service import (
     FixCommitAlreadyClaimedError,
     FixCommitTrackingService,
@@ -114,6 +115,17 @@ def test_request_is_persisted_with_issue_membership_before_generation(lifecycle_
     assert record.requested_issue_count == 2
     assert [link.issue_id for link in record.issue_links] == [issue.id for issue in issues]
     assert all(link.status == FixCommitIssueStatus.REQUESTED.value for link in record.issue_links)
+
+
+def test_review_detail_serializes_fix_commit_issue_links(lifecycle_db):
+    db, repository, pull_request, review, issues = lifecycle_db
+    record, _ = _create(db, repository, pull_request, review, issues[:1])
+
+    response = ReviewDetailResponse.model_validate(review)
+
+    assert response.fix_commits[0].id == record.id
+    assert response.fix_commits[0].issues[0].issue_id == issues[0].id
+    assert response.fix_commits[0].issues[0].status == FixCommitIssueStatus.REQUESTED
 
 
 def test_idempotency_reuses_same_request_and_changes_with_head_or_selection(lifecycle_db):
