@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 from types import SimpleNamespace
@@ -263,14 +265,25 @@ def test_synchronize_webhook_associates_review_job_by_generated_sha(lifecycle_db
         },
     }
 
+    webhook_secret = "unit-test-webhook-secret"
+    request_body = json.dumps(payload).encode()
+    signature = "sha256=" + hmac.new(
+        webhook_secret.encode(),
+        request_body,
+        hashlib.sha256,
+    ).hexdigest()
+
     class Request:
-        headers = {"X-GitHub-Event": "pull_request"}
+        headers = {
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": signature,
+        }
 
         async def body(self):
-            return json.dumps(payload).encode()
+            return request_body
 
     with (
-        patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": ""}),
+        patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": webhook_secret}),
         patch.object(webhook.process_review_job, "send") as send,
     ):
         response = asyncio.run(webhook.github_webhook(Request(), db))

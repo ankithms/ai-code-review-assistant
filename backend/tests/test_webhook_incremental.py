@@ -1,10 +1,13 @@
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -13,7 +16,49 @@ from app.routes import webhook
 from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
 
 
+WEBHOOK_SECRET = "unit-test-webhook-secret"
+
+
 class GithubWebhookIncrementalTests(unittest.TestCase):
+    def test_signature_verification_fails_closed_without_configured_secret(self):
+        with patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": ""}):
+            with self.assertRaises(HTTPException) as context:
+                webhook.verify_github_signature(_FakeRequest(b"{}"), b"{}")
+
+        self.assertEqual(context.exception.status_code, 503)
+        self.assertEqual(
+            context.exception.detail,
+            "GitHub webhook verification is unavailable",
+        )
+
+    def test_signature_verification_rejects_missing_signature(self):
+        with patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": WEBHOOK_SECRET}):
+            with self.assertRaises(HTTPException) as context:
+                webhook.verify_github_signature(_FakeRequest(b"{}"), b"{}")
+
+        self.assertEqual(context.exception.status_code, 401)
+        self.assertEqual(context.exception.detail, "Missing GitHub webhook signature")
+
+    def test_signature_verification_rejects_invalid_signature(self):
+        request = _FakeRequest(
+            b"{}",
+            headers={"X-Hub-Signature-256": "sha256=invalid"},
+        )
+
+        with patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": WEBHOOK_SECRET}):
+            with self.assertRaises(HTTPException) as context:
+                webhook.verify_github_signature(request, b"{}")
+
+        self.assertEqual(context.exception.status_code, 401)
+        self.assertEqual(context.exception.detail, "Invalid GitHub webhook signature")
+
+    def test_signature_verification_accepts_valid_signature(self):
+        body = b'{"action":"opened"}'
+        request = _FakeRequest(body, headers=_signed_headers(body))
+
+        with patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": WEBHOOK_SECRET}):
+            webhook.verify_github_signature(request, body)
+
     def test_pull_request_review_comment_ai_fix_command_dispatches_to_native_handler(self):
         payload = {
             "action": "created",
@@ -29,13 +74,23 @@ class GithubWebhookIncrementalTests(unittest.TestCase):
                 "body": "/ai-fix",
             },
         }
+        body = json.dumps(payload).encode()
         request = _FakeRequest(
-            json.dumps(payload).encode(),
-            headers={"X-GitHub-Event": "pull_request_review_comment"},
+            body,
+            headers=_signed_headers(
+                body,
+                event="pull_request_review_comment",
+            ),
         )
 
         with (
-            patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": "", "GITHUB_ACCESS_TOKEN": "token"}),
+            patch.dict(
+                os.environ,
+                {
+                    "GITHUB_WEBHOOK_SECRET": WEBHOOK_SECRET,
+                    "GITHUB_ACCESS_TOKEN": "token",
+                },
+            ),
             patch.object(webhook, "handle_github_native_fix_comment", return_value=True) as handle_native_fix,
         ):
             response = asyncio.run(webhook.github_webhook(request, SimpleNamespace()))
@@ -70,7 +125,8 @@ class GithubWebhookIncrementalTests(unittest.TestCase):
                 },
             },
         }
-        request = _FakeRequest(json.dumps(payload).encode())
+        body = json.dumps(payload).encode()
+        request = _FakeRequest(body, headers=_signed_headers(body))
 
         class Query:
             def filter(self, *args):
@@ -83,7 +139,7 @@ class GithubWebhookIncrementalTests(unittest.TestCase):
         job = SimpleNamespace(id=42)
 
         with (
-            patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": ""}),
+            patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": WEBHOOK_SECRET}),
             patch.object(webhook, "_handle_fix_pull_request_webhook", return_value=False),
             patch.object(webhook, "get_active_review_job_by_commit", return_value=None),
             patch.object(webhook, "create_review_job", return_value=job) as create_review_job,
@@ -189,6 +245,18 @@ class _FakeRequest:
 
     async def body(self):
         return self._body
+
+
+def _signed_headers(body: bytes, event: str | None = None) -> dict[str, str]:
+    signature = "sha256=" + hmac.new(
+        WEBHOOK_SECRET.encode(),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+    headers = {"X-Hub-Signature-256": signature}
+    if event:
+        headers["X-GitHub-Event"] = event
+    return headers
 
 
 if __name__ == "__main__":

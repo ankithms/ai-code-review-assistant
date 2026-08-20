@@ -48,6 +48,10 @@ This project aims to streamline code reviews by providing instant AI-powered fee
 
 Pull request webhooks are handled asynchronously. The FastAPI webhook endpoint validates the GitHub signature and payload, creates a `review_jobs` row, pushes the job to Redis through Dramatiq, and returns immediately. A separate worker process fetches the pull request details, runs the Gemini review, stores results, and posts GitHub comments.
 
+`GITHUB_WEBHOOK_SECRET` is mandatory. The webhook endpoint fails closed with
+HTTP 503 when verification is not configured and rejects missing or invalid
+signatures with HTTP 401.
+
 Required environment variables:
 
 ```bash

@@ -284,13 +284,17 @@ def _find_fix_pull_request(
     return None
 
 
-def verify_github_signature(request, body):
-    import os
-
+def verify_github_signature(request: Request, body: bytes) -> None:
     secret = os.getenv("GITHUB_WEBHOOK_SECRET")
 
-    if not secret:
-        return
+    if not secret or not secret.strip():
+        logger.error(
+            "Rejecting GitHub webhook because signature verification is not configured"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub webhook verification is unavailable",
+        )
 
     signature = request.headers.get("X-Hub-Signature-256")
 
