@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
+from app.authentication import require_authenticated_user
 from app.db.models import FixCommit, FixCommitIssue, Issue
 from app.db.session import get_db
 from app.routes.fixes import _fix_commit_response
@@ -10,6 +11,7 @@ from app.schemas.fixes import FixCommitResponse
 router = APIRouter(
     prefix="/repositories/{repository_id}",
     tags=["fix-commits"],
+    dependencies=[Depends(require_authenticated_user)],
 )
 
 

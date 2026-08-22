@@ -64,6 +64,11 @@ docker compose \
   uv run alembic upgrade head
 )
 
+export LIVE_E2E_SESSION_TOKEN="$(
+  cd "${BACKEND_DIR}"
+  uv run python -c 'from app.authentication import create_session; from app.db.session import SessionLocal; db = SessionLocal(); print(create_session(db, "live-e2e-admin")); db.close()'
+)"
+
 cd "${BACKEND_DIR}"
 
 uv run uvicorn app.main:app \
@@ -77,4 +82,3 @@ uv run dramatiq app.tasks.review_tasks \
 worker_pid=$!
 
 uv run python -m unittest tests.e2e.test_live_review_flow -v
-

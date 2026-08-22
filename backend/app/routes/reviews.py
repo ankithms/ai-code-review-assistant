@@ -4,6 +4,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.authentication import require_authenticated_user
 from app.db.models import Repository
 from app.db.session import get_db
 from app.repositories.review_repository import (
@@ -23,7 +24,8 @@ from app.schemas.responses import (
 
 router = APIRouter(
     prefix="/repositories/{repository_id}/reviews",
-    tags=["reviews"]
+    tags=["reviews"],
+    dependencies=[Depends(require_authenticated_user)],
 )
 logger = logging.getLogger(__name__)
 

@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.authentication import require_authenticated_user
 from app.db.session import get_db
 from app.repositories.pull_request_repositories import get_pull_requests_for_repository
 from app.schemas.responses import PullRequestResponse
 
 router = APIRouter(
     prefix="/repositories/{repository_id}/pull-requests",
-    tags=["pull-requests"]
+    tags=["pull-requests"],
+    dependencies=[Depends(require_authenticated_user)],
 )
 
 

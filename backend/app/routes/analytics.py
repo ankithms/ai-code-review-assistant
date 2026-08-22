@@ -9,6 +9,7 @@ from fastapi import (
 
 from sqlalchemy.orm import Session
 
+from app.authentication import require_authenticated_user
 from app.db.models import Repository
 from app.db.session import get_db
 
@@ -22,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/repositories/{repository_id}/analytics",
-    tags=["analytics"]
+    tags=["analytics"],
+    dependencies=[Depends(require_authenticated_user)],
 )
 
 

@@ -90,6 +90,21 @@ class Repository(Base):
     )
 
 
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    github_login = Column(String(255), nullable=False, index=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+
+
 class Review(Base):
     __tablename__ = "reviews"
 

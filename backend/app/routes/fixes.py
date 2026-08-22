@@ -5,6 +5,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.authentication import require_authenticated_user
 from app.ai.review_service import AIReviewServiceError
 from app.db.models import FixCommit, Issue, PullRequest, ReviewJob
 from app.db.session import get_db
@@ -38,6 +39,7 @@ from app.services.validation_service import ValidationService
 router = APIRouter(
     prefix="/repositories/{repository_id}/reviews/{review_id}/fixes",
     tags=["fixes"],
+    dependencies=[Depends(require_authenticated_user)],
 )
 logger = logging.getLogger(__name__)
 

@@ -53,6 +53,11 @@ docker compose \
   uv run alembic upgrade head
 )
 
+export E2E_SESSION_TOKEN="$(
+  cd "${BACKEND_DIR}"
+  uv run python -c 'from app.authentication import create_session; from app.db.session import SessionLocal; db = SessionLocal(); print(create_session(db, "e2e-admin")); db.close()'
+)"
+
 cd "${BACKEND_DIR}"
 
 GITHUB_ACCESS_TOKEN="" uv run uvicorn app.main:app \

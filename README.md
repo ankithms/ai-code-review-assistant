@@ -63,6 +63,13 @@ DRAMATIQ_REDIS_MAINTENANCE_CHANCE=100000
 GITHUB_ACCESS_TOKEN=...
 GITHUB_WEBHOOK_SECRET=...
 GOOGLE_API_KEY=...
+# GitHub OAuth credentials for the single dashboard administrator.
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+ALLOWED_GITHUB_USERS=your-github-login
+# Use false only for local HTTP development; HTTPS deployments must use true.
+SESSION_COOKIE_SECURE=false
+SESSION_MAX_AGE_SECONDS=28800
 # Optional hard deadline for one Gemini review/fix invocation.
 AI_MODEL_DEADLINE_SECONDS=120
 # Comma-separated browser origins allowed to call FastAPI directly.
@@ -106,9 +113,30 @@ docker compose up --build
 ```
 
 The dashboard is then available at `http://localhost:3000`. Nginx serves the
-single-page application and proxies `/api` requests to FastAPI; the backend is
-also exposed directly at `http://localhost:8000` for webhook delivery and API
-development.
+single-page application and proxies `/api` requests to FastAPI. The Compose
+backend is internal-only; deliver GitHub webhooks through
+`http://localhost:3000/api/webhooks/github`. Running FastAPI directly on port
+8000 remains available for local API development.
+
+## Dashboard authentication
+
+The dashboard uses GitHub OAuth for a single configured administrator. Add the
+OAuth callback URL for your deployment (for example,
+`https://review.example.com/api/auth/github/callback`) to the GitHub OAuth app,
+then set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and
+`ALLOWED_GITHUB_USERS`. The callback validates an OAuth state value, does not
+return GitHub's OAuth token to the browser, and instead creates an opaque,
+database-backed session cookie.
+
+Set `SESSION_COOKIE_SECURE=true` for every HTTPS deployment. All review,
+analytics, pull-request, repository, and AI-fix APIs require that session;
+only the signed GitHub webhook and `/healthz` remain public.
+
+If FastAPI is running directly on `http://localhost:8000`, set
+`LOGIN_SUCCESS_REDIRECT=http://localhost:5173/` so the OAuth callback returns
+to the Vite dashboard. That URL must have an origin listed in
+`CORS_ALLOWED_ORIGINS`. With Docker Compose, leave it as `/`: Nginx receives
+the callback under `/api` and redirects it to the dashboard on port 3000.
 
 Run and validate the frontend:
 

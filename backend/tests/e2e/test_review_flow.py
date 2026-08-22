@@ -7,21 +7,28 @@ import unittest
 
 import requests
 
+from app.authentication import SESSION_COOKIE_NAME
+
 
 BASE_URL = os.getenv("E2E_BASE_URL")
 WEBHOOK_SECRET = os.getenv("E2E_WEBHOOK_SECRET", "")
+SESSION_TOKEN = os.getenv("E2E_SESSION_TOKEN", "")
 
 
 @unittest.skipUnless(BASE_URL, "requires the isolated Docker E2E stack")
 class ReviewFlowEndToEndTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if not SESSION_TOKEN:
+            raise RuntimeError("E2E_SESSION_TOKEN is required")
+        cls.api = requests.Session()
+        cls.api.cookies.set(SESSION_COOKIE_NAME, SESSION_TOKEN)
         deadline = time.monotonic() + 30
         last_error = None
 
         while time.monotonic() < deadline:
             try:
-                response = requests.get(f"{BASE_URL}/", timeout=2)
+                response = requests.get(f"{BASE_URL}/healthz", timeout=2)
                 if response.status_code == 200:
                     return
                 last_error = f"API returned HTTP {response.status_code}"
@@ -80,7 +87,7 @@ class ReviewFlowEndToEndTests(unittest.TestCase):
         repository, review = self._wait_for_review()
         repository_id = repository["id"]
 
-        detail = requests.get(
+        detail = self.api.get(
             f"{BASE_URL}/repositories/{repository_id}/reviews/{review['id']}",
             timeout=5,
         )
@@ -92,7 +99,7 @@ class ReviewFlowEndToEndTests(unittest.TestCase):
         self.assertEqual(detail_payload["issues"][0]["line"], 2)
         self.assertEqual(detail_payload["issues"][0]["status"], "OPEN")
 
-        analytics = requests.get(
+        analytics = self.api.get(
             f"{BASE_URL}/repositories/{repository_id}/analytics",
             timeout=5,
         )
@@ -112,7 +119,7 @@ class ReviewFlowEndToEndTests(unittest.TestCase):
         last_state = None
 
         while time.monotonic() < deadline:
-            repositories_response = requests.get(
+            repositories_response = self.api.get(
                 f"{BASE_URL}/repositories",
                 timeout=5,
             )
@@ -127,7 +134,7 @@ class ReviewFlowEndToEndTests(unittest.TestCase):
                 None,
             )
             if repository:
-                reviews_response = requests.get(
+                reviews_response = self.api.get(
                     f"{BASE_URL}/repositories/{repository['id']}/reviews",
                     timeout=5,
                 )

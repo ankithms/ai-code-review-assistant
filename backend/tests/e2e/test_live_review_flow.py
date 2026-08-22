@@ -8,6 +8,8 @@ import unittest
 import requests
 from dotenv import load_dotenv
 
+from app.authentication import SESSION_COOKIE_NAME
+
 
 load_dotenv()
 
@@ -17,6 +19,7 @@ REPOSITORY = os.getenv("LIVE_E2E_REPOSITORY")
 PR_NUMBER = os.getenv("LIVE_E2E_PR_NUMBER")
 WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
 GITHUB_TOKEN = os.getenv("GITHUB_ACCESS_TOKEN", "")
+SESSION_TOKEN = os.getenv("LIVE_E2E_SESSION_TOKEN", "")
 GITHUB_API_BASE_URL = "https://api.github.com"
 
 
@@ -37,8 +40,12 @@ class LiveReviewFlowEndToEndTests(unittest.TestCase):
             raise RuntimeError("GOOGLE_API_KEY is required")
         if not WEBHOOK_SECRET:
             raise RuntimeError("GITHUB_WEBHOOK_SECRET is required")
+        if not SESSION_TOKEN:
+            raise RuntimeError("LIVE_E2E_SESSION_TOKEN is required")
 
         cls.pr_number = int(PR_NUMBER)
+        cls.api = requests.Session()
+        cls.api.cookies.set(SESSION_COOKIE_NAME, SESSION_TOKEN)
         cls.github_headers = {
             "Authorization": f"Bearer {GITHUB_TOKEN}",
             "Accept": "application/vnd.github+json",
@@ -101,7 +108,7 @@ class LiveReviewFlowEndToEndTests(unittest.TestCase):
         self.assertEqual(accepted.json()["status"], "queued")
 
         repository, review = self._wait_for_review()
-        detail_response = requests.get(
+        detail_response = self.api.get(
             f"{BASE_URL}/repositories/{repository['id']}/reviews/{review['id']}",
             timeout=20,
         )
@@ -147,7 +154,7 @@ class LiveReviewFlowEndToEndTests(unittest.TestCase):
         last_error = None
         while time.monotonic() < deadline:
             try:
-                response = requests.get(f"{BASE_URL}/", timeout=2)
+                response = requests.get(f"{BASE_URL}/healthz", timeout=2)
                 if response.status_code == 200:
                     return
                 last_error = f"API returned HTTP {response.status_code}"
@@ -160,7 +167,7 @@ class LiveReviewFlowEndToEndTests(unittest.TestCase):
         deadline = time.monotonic() + 240
         last_state = None
         while time.monotonic() < deadline:
-            repositories_response = requests.get(
+            repositories_response = self.api.get(
                 f"{BASE_URL}/repositories",
                 timeout=10,
             )
@@ -174,7 +181,7 @@ class LiveReviewFlowEndToEndTests(unittest.TestCase):
                 None,
             )
             if repository:
-                reviews_response = requests.get(
+                reviews_response = self.api.get(
                     f"{BASE_URL}/repositories/{repository['id']}/reviews",
                     timeout=10,
                 )

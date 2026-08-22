@@ -1,6 +1,7 @@
 import logging
 import os
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from app.authentication import require_authenticated_user
 from app.routes.auth import router as auth_router
 from app.routes.webhook import router as webhook_router
 from app.routes.reviews import router as reviews_router
@@ -33,7 +34,10 @@ logging.basicConfig(
 
 app = FastAPI(
     title="AI Code Review Assistant",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 app.add_middleware(
@@ -53,8 +57,13 @@ app.include_router(fix_commits_router)
 app.include_router(pull_request_router)
 app.include_router(analytics_router)
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(require_authenticated_user)])
 def root():
     return {
         "message": "AI Code Review Assistant Running"
     }
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    return {"status": "ok"}

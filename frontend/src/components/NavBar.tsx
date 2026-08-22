@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../auth/auth-context";
 import { useRepository } from "../context/useRepository";
 
 export default function Navbar() {
@@ -8,6 +9,7 @@ export default function Navbar() {
     setSelectedRepositoryId,
     loading,
   } = useRepository();
+  const { githubLogin, logout } = useAuth();
 
   return (
     <nav className="top-nav">
@@ -73,6 +75,10 @@ export default function Navbar() {
             )}
           </select>
         </label>
+
+        <button className="nav-logout" type="button" onClick={() => void logout()}>
+          Sign out ({githubLogin})
+        </button>
       </div>
     </nav>
   );
