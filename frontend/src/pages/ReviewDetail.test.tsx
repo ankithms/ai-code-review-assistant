@@ -58,6 +58,25 @@ const completedFixCommit = {
   updated_at: "2026-08-18T00:00:00Z",
 };
 
+const skippedFixAttempt = {
+  ...completedFixCommit,
+  id: 10,
+  status: "VALIDATING",
+  validation_status: "FAILED",
+  valid_issue_count: 0,
+  skipped_issue_count: 1,
+  issues: [{
+    issue_id: 5,
+    status: "SKIPPED",
+    generated: false,
+    validated: false,
+    committed: false,
+    original_file: "src/auth.py",
+    original_line: 10,
+    skip_reason: "does not have a generated fix",
+  }],
+};
+
 describe("ReviewDetail", () => {
   beforeEach(() => {
     apiGet.mockReset();
@@ -110,5 +129,36 @@ describe("ReviewDetail", () => {
     );
     expect(await screen.findByText("Fixes generated.")).toBeInTheDocument();
   });
-});
 
+  it("shows an unsuccessful request as a compact activity event", async () => {
+    apiGet.mockResolvedValue({
+      data: { ...review, fix_commits: [skippedFixAttempt] },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/reviews/42"]}>
+        <RepositoryContext.Provider
+          value={{
+            repositories: [{ id: 7, full_name: "openai/reviewer" }],
+            selectedRepository: { id: 7, full_name: "openai/reviewer" },
+            selectedRepositoryId: 7,
+            setSelectedRepositoryId: vi.fn(),
+            loading: false,
+          }}
+        >
+          <Routes><Route path="/reviews/:id" element={<ReviewDetail />} /></Routes>
+        </RepositoryContext.Provider>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("Fix activity")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Failed" })).toBeInTheDocument();
+    expect(screen.getByText("does not have a generated fix")).toBeInTheDocument();
+    expect(screen.getByText("Issue #5")).toBeInTheDocument();
+    expect(screen.getByText("src/auth.py:10")).toBeInTheDocument();
+    expect(screen.getByText("Fixes ready")).toBeInTheDocument();
+    expect(screen.getByText("View details")).toBeInTheDocument();
+    expect(screen.queryByText("Still open")).not.toBeInTheDocument();
+    expect(screen.queryByText("Requested / committed")).not.toBeInTheDocument();
+  });
+});

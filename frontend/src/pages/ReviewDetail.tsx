@@ -167,6 +167,45 @@ const fixIssueStatusIcon = (status: string) => ({
   FAILED_TO_VERIFY: "✕",
 }[status] || "•");
 
+const hasCreatedCommit = (attempt: FixCommit) =>
+  Boolean(attempt.generated_commit_sha || attempt.github_commit_sha);
+
+const fixAttemptOutcome = (attempt: FixCommit) => {
+  if (attempt.status === "FAILED" || attempt.validation_status === "FAILED") {
+    return "Failed";
+  }
+  if (
+    !hasCreatedCommit(attempt)
+    && attempt.requested_issue_count > 0
+    && attempt.valid_issue_count === 0
+    && attempt.skipped_issue_count > 0
+  ) {
+    return "Skipped";
+  }
+  return fixStatusLabel(attempt.status);
+};
+
+const fixAttemptTone = (attempt: FixCommit) => {
+  const outcome = fixAttemptOutcome(attempt);
+  if (outcome === "Failed") return "failed";
+  if (outcome === "Skipped" || attempt.status === "STALE") return "warning";
+  if (hasCreatedCommit(attempt)) return "success";
+  return "progress";
+};
+
+const fixAttemptSummary = (attempt: FixCommit) => {
+  if (attempt.failure_reason) return attempt.failure_reason;
+  const issueWithReason = attempt.issues.find(
+    (issue) => issue.failure_reason || issue.skip_reason
+  );
+  if (issueWithReason?.failure_reason) return issueWithReason.failure_reason;
+  if (issueWithReason?.skip_reason) return issueWithReason.skip_reason;
+  const noun = `finding${attempt.requested_issue_count === 1 ? "" : "s"}`;
+  return hasCreatedCommit(attempt)
+    ? `${attempt.valid_issue_count} of ${attempt.requested_issue_count} requested ${noun} committed.`
+    : `${attempt.valid_issue_count} of ${attempt.requested_issue_count} requested ${noun} ready.`;
+};
+
 export default function ReviewDetail() {
   const { id } = useParams();
   const { selectedRepository, selectedRepositoryId, loading } = useRepository();
@@ -596,108 +635,99 @@ export default function ReviewDetail() {
       </section>
 
       {review.fix_commits.length > 0 && (
-        <section className="fix-history">
-          {review.fix_commits.map((commit) => (
-            <article key={commit.id} className="panel fix-tracker">
-              <div>
-                <p className="page-kicker">AI Fix Commit</p>
-                <h2 className="panel__title">
-                  {(commit.generated_commit_sha || commit.github_commit_sha)?.slice(0, 7)
-                    || fixStatusLabel(commit.status)}
-                </h2>
-              </div>
-              <div className="fix-tracker__grid">
-                <div className="meta-item">
-                  <span className="meta-label">Status</span>
-                  <span className="meta-value">{fixStatusLabel(commit.status)}</span>
-                </div>
-                <div className="meta-item">
-                  <span className="meta-label">Validation</span>
-                  <span className="meta-value">{commit.validation_status}</span>
-                </div>
-                <div className="meta-item">
-                  <span className="meta-label">Source HEAD</span>
-                  <span className="meta-value">{commit.source_head_sha?.slice(0, 7) || "—"}</span>
-                </div>
-                <div className="meta-item">
-                  <span className="meta-label">Requested / committed</span>
-                  <span className="meta-value">{commit.requested_issue_count} / {commit.valid_issue_count}</span>
-                </div>
-                <div className="meta-item">
-                  <span className="meta-label">Author</span>
-                  <span className="meta-value">{commit.author || "AI Code Review Assistant"}</span>
-                </div>
-                <div className="meta-item">
-                  <span className="meta-label">Created</span>
-                  <span className="meta-value">{new Date(commit.created_at).toLocaleString()}</span>
-                </div>
-              </div>
-              <div className="fix-tracker__grid">
-                <div className="meta-item"><span className="meta-label">Resolved</span><span className="meta-value">{commit.resolved_issue_count}</span></div>
-                <div className="meta-item"><span className="meta-label">Still open</span><span className="meta-value">{commit.remaining_issue_count}</span></div>
-                <div className="meta-item"><span className="meta-label">Moved</span><span className="meta-value">{commit.moved_issue_count}</span></div>
-                <div className="meta-item"><span className="meta-label">New</span><span className="meta-value">{commit.new_issue_count}</span></div>
-                <div className="meta-item"><span className="meta-label">Skipped</span><span className="meta-value">{commit.skipped_issue_count}</span></div>
-                <div className="meta-item"><span className="meta-label">Failed</span><span className="meta-value">{commit.failed_issue_count}</span></div>
-              </div>
-              {commit.verification_completed_at && (
-                <p className="muted">
-                  Verification completed {new Date(commit.verification_completed_at).toLocaleString()}
-                </p>
-              )}
-              {commit.issues.length > 0 && (
-                <ul className="fix-verification-list">
-                  {commit.issues.map((issue) => (
-                    <li key={issue.issue_id}>
-                      <span className={`verification-state verification-state--${issue.status.toLowerCase()}`}>
-                        {fixIssueStatusIcon(issue.status)} {fixIssueStatusLabel(issue.status)}
-                      </span>
-                      <span>Issue #{issue.issue_id}</span>
-                      {(issue.original_file || issue.current_file) && (
-                        <span className="verification-location">
-                          {issue.original_file || "unknown"}
-                          {issue.original_line ? `:${issue.original_line}` : ""}
-                          {issue.status === "MOVED" && (
-                            <> → {issue.current_file || "unknown"}{issue.current_line ? `:${issue.current_line}` : ""}</>
+        <section className="panel fix-activity">
+          <div className="fix-activity__heading">
+            <div>
+              <p className="page-kicker">History</p>
+              <h2 className="panel__title">Fix activity</h2>
+            </div>
+            <span className="muted">
+              {review.fix_commits.length} attempt{review.fix_commits.length === 1 ? "" : "s"}
+            </span>
+          </div>
+
+          <div className="fix-timeline">
+            {review.fix_commits.map((commit) => (
+              <article key={commit.id} className={`fix-event fix-event--${fixAttemptTone(commit)}`}>
+                <span className="fix-event__marker" aria-hidden="true" />
+                <div className="fix-event__body">
+                  <div className="fix-event__header">
+                    <div>
+                      <h3 className="fix-event__title">
+                        {fixAttemptOutcome(commit)}
+                        {hasCreatedCommit(commit) && (
+                          <span className="fix-event__sha"> · {(commit.generated_commit_sha || commit.github_commit_sha)!.slice(0, 7)}</span>
+                        )}
+                      </h3>
+                      <p className="fix-event__summary">{fixAttemptSummary(commit)}</p>
+                    </div>
+                    <time className="fix-event__time" dateTime={commit.created_at}>
+                      {new Date(commit.created_at).toLocaleString()}
+                    </time>
+                  </div>
+
+                  {commit.issues.length > 0 && (
+                    <ul className="fix-verification-list">
+                      {commit.issues.map((issue) => (
+                        <li key={issue.issue_id}>
+                          <span className={`verification-state verification-state--${issue.status.toLowerCase()}`}>
+                            {fixIssueStatusIcon(issue.status)} {fixIssueStatusLabel(issue.status)}
+                          </span>
+                          <span>Issue #{issue.issue_id}</span>
+                          {(issue.original_file || issue.current_file) && (
+                            <span className="verification-location">
+                              {issue.original_file || "unknown"}
+                              {issue.original_line ? `:${issue.original_line}` : ""}
+                              {issue.status === "MOVED" && (
+                                <> → {issue.current_file || "unknown"}{issue.current_line ? `:${issue.current_line}` : ""}</>
+                              )}
+                            </span>
                           )}
-                        </span>
-                      )}
-                      {issue.skip_reason ? ` — ${issue.skip_reason}` : ""}
-                      {issue.failure_reason ? ` — ${issue.failure_reason}` : ""}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {commit.new_issues.length > 0 && (
-                <div className="fix-new-issues">
-                  <strong>New issues found after the AI commit</strong>
-                  <ul>
-                    {commit.new_issues.map((issue) => (
-                      <li key={issue.id}>
-                        {issue.file || "unknown"}{issue.line ? `:${issue.line}` : ""} — {issue.comment}
-                      </li>
-                    ))}
-                  </ul>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <details className="fix-event__details">
+                    <summary>View details</summary>
+                    <dl className="fix-event__metadata">
+                      <div><dt>Validation</dt><dd>{commit.validation_status}</dd></div>
+                      <div><dt>Source HEAD</dt><dd>{commit.source_head_sha?.slice(0, 7) || "—"}</dd></div>
+                      <div><dt>Requested</dt><dd>{commit.requested_issue_count}</dd></div>
+                      <div><dt>{hasCreatedCommit(commit) ? "Committed" : "Fixes ready"}</dt><dd>{commit.valid_issue_count}</dd></div>
+                      <div><dt>Author</dt><dd>{commit.author || "AI Code Review Assistant"}</dd></div>
+                      {hasCreatedCommit(commit) && <div><dt>Resolved</dt><dd>{commit.resolved_issue_count}</dd></div>}
+                      {hasCreatedCommit(commit) && <div><dt>Still open</dt><dd>{commit.remaining_issue_count}</dd></div>}
+                      {hasCreatedCommit(commit) && <div><dt>New findings</dt><dd>{commit.new_issue_count}</dd></div>}
+                    </dl>
+                    {commit.verification_completed_at && (
+                      <p className="muted">Verification completed {new Date(commit.verification_completed_at).toLocaleString()}</p>
+                    )}
+                    {commit.failure_reason && <p className="fix-invalid">{commit.failure_reason}</p>}
+                    {commit.commit_message && <pre className="fix-code">{commit.commit_message}</pre>}
+                  </details>
+
+                  {commit.new_issues.length > 0 && (
+                    <div className="fix-new-issues">
+                      <strong>New issues found after the AI commit</strong>
+                      <ul>
+                        {commit.new_issues.map((issue) => (
+                          <li key={issue.id}>{issue.file || "unknown"}{issue.line ? `:${issue.line}` : ""} — {issue.comment}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {(commit.generated_commit_url || commit.github_commit_url) && (
+                    <div className="fix-actions">
+                      <a className="secondary-button" href={commit.generated_commit_url || commit.github_commit_url!} target="_blank" rel="noreferrer">
+                        View Commit
+                      </a>
+                    </div>
+                  )}
                 </div>
-              )}
-              {commit.failure_reason && <p className="fix-invalid">{commit.failure_reason}</p>}
-              {commit.commit_message && (
-                <pre className="fix-code">{commit.commit_message}</pre>
-              )}
-              {(commit.generated_commit_url || commit.github_commit_url) && (
-                <div className="fix-actions">
-                  <a
-                    className="secondary-button"
-                    href={commit.generated_commit_url || commit.github_commit_url!}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View Commit
-                  </a>
-                </div>
-              )}
-            </article>
-          ))}
+              </article>
+            ))}
+          </div>
         </section>
       )}
 
