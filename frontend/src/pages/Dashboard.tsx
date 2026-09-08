@@ -1,3 +1,4 @@
+import { isDemoMode } from "../demo/mode";
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import StatCard from "../components/StatCard";
@@ -192,7 +193,8 @@ export default function Dashboard() {
           <button
             type="button"
             className="secondary-button"
-            disabled={refreshStatus === "refreshing"}
+            disabled={isDemoMode() || refreshStatus === "refreshing"}
+            title={isDemoMode() ? "Live refresh is disabled in the demo" : undefined}
             onClick={refreshAnalytics}
           >
             {refreshStatus === "refreshing"

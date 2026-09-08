@@ -1,3 +1,4 @@
+import { isDemoMode } from "../demo/mode";
 import {
   useEffect,
   useMemo,
@@ -7,7 +8,7 @@ import {
 import { api } from "../services/api";
 import { RepositoryContext, type Repository } from "./repository-context";
 
-const STORAGE_KEY = "selectedRepositoryId";
+const STORAGE_KEY = isDemoMode() ? "demoSelectedRepositoryId" : "selectedRepositoryId";
 
 export function RepositoryProvider({
   children,

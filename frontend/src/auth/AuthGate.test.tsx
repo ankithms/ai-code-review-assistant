@@ -33,5 +33,6 @@ describe("AuthGate", () => {
 
     const loginLink = await screen.findByRole("link", { name: "Continue with GitHub" });
     expect(loginLink).toHaveAttribute("href", "/api/auth/github/login");
+    expect(screen.getByRole("link", { name: "Try demo" })).toHaveAttribute("href", "/demo/");
   });
 });

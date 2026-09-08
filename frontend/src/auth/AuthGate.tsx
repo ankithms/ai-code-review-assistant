@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { api, apiBaseUrl } from "../services/api";
+import { isDemoMode } from "../demo/mode";
 import { AuthContext } from "./auth-context";
 
 type AuthState =
@@ -13,6 +14,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
 
   useEffect(() => {
+    if (isDemoMode()) return;
     api.get("/auth/session")
       .then((response) => {
         setState({
@@ -29,6 +31,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
       });
   }, []);
 
+  if (isDemoMode()) {
+    return <AuthContext.Provider value={{ githubLogin: "Demo visitor", logout: async () => { window.location.assign("/"); } }}>{children}</AuthContext.Provider>;
+  }
+
   if (state.status === "loading") {
     return <main className="auth-screen">Checking your session…</main>;
   }
@@ -38,7 +44,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <main className="auth-screen">
         <section className="auth-card">
           <p className="eyebrow">AI Code Review Assistant</p>
-          <h1>Sign in to your dashboard</h1>
+          <h1>Explore AI code reviews</h1>
+          <p>Browse sample findings, code changes, and suggested fixes. No account needed.</p>
+          <a className="auth-button" href="/demo/">Try demo</a>
           <p>Use the GitHub account authorized for this instance.</p>
           <a className="auth-button" href={`${apiBaseUrl}/auth/github/login`}>
             Continue with GitHub
@@ -53,7 +61,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <main className="auth-screen">
         <section className="auth-card">
           <h1>Authentication service unavailable</h1>
-          <p>Check the server configuration, then reload this page.</p>
+          <p>You can still explore the sample dashboard.</p>
+          <a className="auth-button" href="/demo/">Try demo</a>
         </section>
       </main>
     );

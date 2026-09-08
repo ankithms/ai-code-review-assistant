@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
@@ -36,6 +37,25 @@ def test_dashboard_api_requires_a_session():
     assert apply_fix.status_code == 401
 
 
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/repositories/1/reviews"),
+    ("GET", "/repositories/1/analytics"),
+    ("POST", "/repositories/1/analytics/sync"),
+    ("POST", "/repositories/1/reviews/1/fixes/generate"),
+    ("POST", "/repositories/1/reviews/1/fixes/preview"),
+    ("POST", "/repositories/1/reviews/1/fixes/apply"),
+    ("PATCH", "/repositories/1/reviews/issues/1/status"),
+])
+def test_demo_visitors_cannot_access_live_api(method, path):
+    with _client() as (client, _db):
+        response = client.request(
+            method, path,
+            headers={"Referer": "http://localhost:3000/demo/"},
+            json={"issue_ids": [], "confirm": True, "status": "RESOLVED"},
+        )
+    assert response.status_code == 401
+
 def test_database_backed_session_authorizes_api_access_and_logout():
     with _client() as (client, db):
         token = create_session(db, "ankithms")
@@ -61,6 +81,7 @@ def test_oauth_callback_requires_state_and_never_returns_github_token():
         "GITHUB_CLIENT_SECRET": "client-secret",
         "ALLOWED_GITHUB_USERS": "ankithms",
         "SESSION_COOKIE_SECURE": "false",
+        "LOGIN_SUCCESS_REDIRECT": "/",
     }
     with _client() as (client, db), patch.dict("os.environ", environment, clear=False):
         login = client.get("/auth/github/login", follow_redirects=False)

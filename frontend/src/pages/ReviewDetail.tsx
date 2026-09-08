@@ -1,5 +1,7 @@
+import { isDemoMode } from "../demo/mode";
+import { demoDiffs } from "../demo/data";
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { api } from "../services/api";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusBadge from "../components/StatusBadge";
@@ -444,6 +446,10 @@ export default function ReviewDetail() {
     );
   }
 
+  if (isDemoMode() && !Object.hasOwn(demoDiffs, id || "")) {
+    return <main className="page"><h1>Sample review not found</h1><Link className="link-button" to="/reviews">Browse sample reviews</Link></main>;
+  }
+
   if (!review) {
     return (
       <main className="page">
@@ -472,12 +478,19 @@ export default function ReviewDetail() {
         <p className="issue-comment">{review.summary}</p>
       </section>
 
+      {isDemoMode() && <section className="panel summary-panel">
+        <h2 className="panel__title">Sample code diff</h2>
+        {review.id === 1 && <p><Link className="link-button" to="/reviews/2">See the follow-up review after the fix →</Link></p>}
+        <pre className="fix-code">{demoDiffs[review.id]}</pre>
+        <p className="page-description">Suggested replacements appear with each finding below. These illustrative fixes have not been executed.</p>
+      </section>}
+
       <section className="panel fix-panel">
         <div>
           <p className="page-kicker">AI Fix Commit</p>
           <h2 className="panel__title">Selected Fixes</h2>
           <p className="page-description">
-            Generate structured line-range fixes, preview validation results, then commit them to this Pull Request.
+            {isDemoMode() ? "Live actions are disabled. Explore the saved sample suggestions below." : "Generate structured line-range fixes, preview validation results, then commit them to this Pull Request."}
           </p>
         </div>
 
@@ -486,7 +499,7 @@ export default function ReviewDetail() {
             type="button"
             className="primary-button"
             onClick={generateFixes}
-            disabled={fixLoading || eligibleIssueIds.length === 0}
+            disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
           >
             Generate Fixes
           </button>
@@ -494,7 +507,7 @@ export default function ReviewDetail() {
             type="button"
             className="secondary-button"
             onClick={previewFixes}
-            disabled={fixLoading || eligibleIssueIds.length === 0}
+            disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
           >
             Preview
           </button>
@@ -502,14 +515,14 @@ export default function ReviewDetail() {
             type="button"
             className="danger-button"
             onClick={commitAiFix}
-            disabled={fixLoading || eligibleIssueIds.length === 0}
+            disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
           >
             Commit AI Fix
           </button>
         </div>
 
         <p className="fix-message">
-          {fixMessage || (
+          {(isDemoMode() ? "Read-only sample. Suggested code is shown with each finding." : fixMessage) || (
             selectedIssueIds.length > 0
               ? `${selectedIssueIds.length} issue${selectedIssueIds.length === 1 ? "" : "s"} selected.`
               : `No selection means all ${eligibleIssueIds.length} eligible finding${eligibleIssueIds.length === 1 ? "" : "s"} are included.`
@@ -715,7 +728,7 @@ export default function ReviewDetail() {
                     <label className="issue-select">
                       <input
                         type="checkbox"
-                        disabled={!issue.eligible_for_fix}
+                        disabled={isDemoMode() || !issue.eligible_for_fix}
                         checked={selectedIssueIds.includes(issue.id)}
                         onChange={() => toggleIssueSelection(issue)}
                       />
@@ -734,7 +747,7 @@ export default function ReviewDetail() {
                         key={status}
                         type="button"
                         onClick={() => updateIssueStatus(issue.id, status)}
-                        disabled={displayStatus === status}
+                        disabled={isDemoMode() || displayStatus === status}
                         className={
                           displayStatus === status
                             ? "status-button status-button--active"

@@ -1,3 +1,5 @@
+import { isDemoMode } from "./demo/mode";
+import { Link } from "react-router-dom";
 import {
   BrowserRouter,
   Routes,
@@ -15,10 +17,16 @@ import { RepositoryProvider } from "./context/RepositoryContext";
 function App() {
   return (
     <AuthGate>
-      <BrowserRouter>
+      <BrowserRouter basename={isDemoMode() ? "/demo" : undefined}>
         <RepositoryProvider>
           <div className="app-shell">
             <Navbar />
+            {isDemoMode() && <aside className="demo-banner" aria-label="Demo workspace">
+              <strong>Read-only demo</strong>
+              <span>Illustrative sample data. Live reviews and GitHub actions are disabled.</span>
+              <Link to="/reviews/1">Explore a sample review →</Link>
+              <Link to="/reviews/4">See unresolved findings →</Link>
+            </aside>}
             <Routes>
               <Route
                 path="/"

@@ -1,8 +1,11 @@
+import { Link } from "react-router-dom";
+import { isDemoMode } from "../demo/mode";
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 import { useRepository } from "../context/useRepository";
 
 type PullRequest = {
+  review_id?: number;
   id: number;
   github_pr_id: number;
   pull_request_number: number | null;
@@ -84,7 +87,7 @@ export default function PullRequests() {
               <tbody>
                 {prs.map((pr) => (
                   <tr key={pr.id}>
-                    <td>{pr.title}</td>
+                    <td>{isDemoMode() && pr.review_id ? <Link className="link-button" to={`/reviews/${pr.review_id}`}>{pr.title}</Link> : pr.title}</td>
                     <td>
                       <span className="file-path">{pr.repository}</span>
                     </td>

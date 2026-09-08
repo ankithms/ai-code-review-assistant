@@ -1,3 +1,4 @@
+import { isDemoMode } from "../demo/mode";
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../auth/auth-context";
 import { useRepository } from "../context/useRepository";
@@ -77,7 +78,7 @@ export default function Navbar() {
         </label>
 
         <button className="nav-logout" type="button" onClick={() => void logout()}>
-          Sign out ({githubLogin})
+          {isDemoMode() ? "Exit demo" : `Sign out (${githubLogin})`}
         </button>
       </div>
     </nav>
