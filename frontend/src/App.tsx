@@ -24,8 +24,9 @@ function App() {
             {isDemoMode() && <aside className="demo-banner" aria-label="Demo workspace">
               <strong>Read-only demo</strong>
               <span>Illustrative sample data. Live reviews and GitHub actions are disabled.</span>
-              <Link to="/reviews/1">Explore a sample review →</Link>
-              <Link to="/reviews/4">See unresolved findings →</Link>
+              <Link to="/reviews/4">Open findings</Link>
+              <Link to="/reviews/1">Successful AI fix</Link>
+              <Link to="/reviews/3">Clean review</Link>
             </aside>}
             <Routes>
               <Route

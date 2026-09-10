@@ -18,10 +18,14 @@ describe("public demo", () => {
     render(<App />);
     expect(await screen.findByText("AI Code Review Dashboard")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh statuses" })).toBeDisabled();
-    await userEvent.click(screen.getByRole("link", { name: "Explore a sample review →" }));
+    await userEvent.click(screen.getByRole("link", { name: "Successful AI fix" }));
     expect(await screen.findByText("Review #1")).toBeInTheDocument();
     expect(screen.getByText("Sample code diff")).toBeInTheDocument();
     expect(screen.getByText(/Handle the empty collection/)).toBeInTheDocument();
+    expect(screen.getByText("Fix activity")).toBeInTheDocument();
+    expect(screen.getAllByText(/c4e18f2/).length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".demo-diff__line--added").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".demo-diff__line--removed").length).toBeGreaterThan(0);
     for (const name of ["Generate Fixes", "Preview", "Commit AI Fix", "OPEN", "RESOLVED", "IGNORED"]) {
       expect(screen.getByRole("button", { name })).toBeDisabled();
     }
@@ -31,7 +35,7 @@ describe("public demo", () => {
     await userEvent.click(screen.getByRole("link", { name: "Pull Requests" }));
     await userEvent.click(await screen.findByRole("link", { name: "Calculate average cart price" }));
     expect(await screen.findByText("Review #1")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("link", { name: "See unresolved findings →" }));
+    await userEvent.click(screen.getByRole("link", { name: "Open findings" }));
     expect(await screen.findByText("Review #4")).toBeInTheDocument();
     expect(screen.getByText("2 Issues")).toBeInTheDocument();
     expect(screen.getByText(/When requested quantity exactly matches stock/)).toBeInTheDocument();

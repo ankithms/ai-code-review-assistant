@@ -473,6 +473,35 @@ button {
   font-weight: 800;
 }
 
+.table-subtitle {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-mode {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #1e40af;
+  background: var(--accent-soft);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.error-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+  background: #fef2f2;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -657,6 +686,37 @@ button {
   line-height: 1.5;
   white-space: pre;
 }
+
+.demo-diff {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.demo-diff__line {
+  display: grid;
+  grid-template-columns: 44px 44px minmax(max-content, 1fr);
+  min-height: 23px;
+}
+
+.demo-diff__line code { padding: 2px 12px; white-space: pre; }
+.demo-diff__number {
+  padding: 2px 8px;
+  border-right: 1px solid rgba(17, 24, 39, 0.08);
+  color: #8c959f;
+  text-align: right;
+  user-select: none;
+}
+.demo-diff__line--added { background: #e6ffec; }
+.demo-diff__line--added code { color: #116329; }
+.demo-diff__line--removed { background: #ffebe9; }
+.demo-diff__line--removed code { color: #82071e; }
+.demo-diff__line--hunk { color: #57606a; background: #ddf4ff; }
+.demo-diff__line--file { color: #1f2328; background: #f6f8fa; font-weight: 800; }
 
 .fix-errors {
   margin: 0;

@@ -1,5 +1,6 @@
 import { isDemoMode } from "../demo/mode";
 import { demoDiffs } from "../demo/data";
+import DemoDiff from "../demo/DemoDiff";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../services/api";
@@ -221,6 +222,8 @@ export default function ReviewDetail() {
   const [fixMessage, setFixMessage] = useState<string | null>(null);
   const [fixCommit, setFixCommit] = useState<FixCommit | null>(null);
   const [fixLoading, setFixLoading] = useState(false);
+  const [reviewLoadErrorKey, setReviewLoadErrorKey] = useState<string | null>(null);
+  const [reviewReloadKey, setReviewReloadKey] = useState(0);
 
   const applyLoadedReview = useCallback((
     nextReview: Review,
@@ -244,10 +247,12 @@ export default function ReviewDetail() {
 
     api.get(`/repositories/${selectedRepositoryId}/reviews/${id}`)
       .then((res) => {
+        setReviewLoadErrorKey(null);
         applyLoadedReview(res.data, selectedRepositoryId, id);
       })
       .catch((error) => {
         console.error(error);
+        setReviewLoadErrorKey(`${selectedRepositoryId}:${id}`);
       });
   }, [applyLoadedReview, id, selectedRepositoryId]);
 
@@ -267,13 +272,14 @@ export default function ReviewDetail() {
       .catch((error) => {
         if (!ignore) {
           console.error(error);
+          setReviewLoadErrorKey(`${selectedRepositoryId}:${id}`);
         }
       });
 
     return () => {
       ignore = true;
     };
-  }, [applyLoadedReview, id, selectedRepositoryId]);
+  }, [applyLoadedReview, id, selectedRepositoryId, reviewReloadKey]);
 
   const isResolvedByAiFix = (issue: Issue) =>
     issue.status === "RESOLVED" && issue.fix_status === "FIX_COMMITTED";
@@ -489,6 +495,10 @@ export default function ReviewDetail() {
     return <main className="page"><h1>Sample review not found</h1><Link className="link-button" to="/reviews">Browse sample reviews</Link></main>;
   }
 
+  if (reviewLoadErrorKey === `${selectedRepositoryId}:${id}`) {
+    return <main className="page"><div className="error-state"><strong>Could not load this review.</strong><button className="secondary-button" type="button" onClick={() => { setReviewLoadErrorKey(null); setReviewReloadKey((key) => key + 1); }}>Try again</button></div></main>;
+  }
+
   if (!review) {
     return (
       <main className="page">
@@ -520,7 +530,7 @@ export default function ReviewDetail() {
       {isDemoMode() && <section className="panel summary-panel">
         <h2 className="panel__title">Sample code diff</h2>
         {review.id === 1 && <p><Link className="link-button" to="/reviews/2">See the follow-up review after the fix →</Link></p>}
-        <pre className="fix-code">{demoDiffs[review.id]}</pre>
+        <DemoDiff diff={demoDiffs[review.id]} />
         <p className="page-description">Suggested replacements appear with each finding below. These illustrative fixes have not been executed.</p>
       </section>}
 

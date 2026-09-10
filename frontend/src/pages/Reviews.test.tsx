@@ -47,7 +47,7 @@ describe("Reviews", () => {
 
     expect(await screen.findByText("2 of 2 reviews")).toBeInTheDocument();
     expect(apiGet).toHaveBeenCalledWith("/repositories/7/reviews");
-    expect(screen.getByRole("link", { name: "#11" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Review #11" })).toHaveAttribute(
       "href",
       "/reviews/11"
     );
@@ -58,8 +58,7 @@ describe("Reviews", () => {
     );
 
     expect(screen.getByText("1 of 2 reviews")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "#11" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "#12" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Review #11" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Review #12" })).toBeInTheDocument();
   });
 });
-

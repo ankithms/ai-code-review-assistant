@@ -18,6 +18,8 @@ export default function PullRequests() {
   const { selectedRepository, selectedRepositoryId, loading } = useRepository();
   const [prState, setPrState] =
     useState<{ repositoryId: number; data: PullRequest[] } | null>(null);
+  const [loadErrorRepositoryId, setLoadErrorRepositoryId] = useState<number | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (selectedRepositoryId === null) {
@@ -34,12 +36,13 @@ export default function PullRequests() {
             data: res.data,
           });
         }
-      });
+      })
+      .catch(() => { if (!ignore) setLoadErrorRepositoryId(selectedRepositoryId); });
 
     return () => {
       ignore = true;
     };
-  }, [selectedRepositoryId]);
+  }, [selectedRepositoryId, reloadKey]);
 
   const prs =
     prState?.repositoryId === selectedRepositoryId
@@ -71,7 +74,11 @@ export default function PullRequests() {
         <div className="empty-state">No repositories are connected yet.</div>
       )}
 
-      {!loading && selectedRepository && (
+      {!loading && selectedRepository && loadErrorRepositoryId === selectedRepositoryId && (
+        <div className="error-state"><strong>Could not load pull requests.</strong><button className="secondary-button" type="button" onClick={() => { setLoadErrorRepositoryId(null); setReloadKey((key) => key + 1); }}>Try again</button></div>
+      )}
+
+      {!loading && selectedRepository && loadErrorRepositoryId !== selectedRepositoryId && (
         <>
           <div className="table-wrap">
             <table className="data-table">

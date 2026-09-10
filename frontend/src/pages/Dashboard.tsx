@@ -75,6 +75,8 @@ export default function Dashboard() {
   const { selectedRepository, selectedRepositoryId, loading } = useRepository();
   const [analyticsState, setAnalyticsState] =
     useState<{ repositoryId: number; data: Analytics } | null>(null);
+  const [loadErrorRepositoryId, setLoadErrorRepositoryId] = useState<number | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [refreshState, setRefreshState] =
     useState<{
       repositoryId: number;
@@ -100,13 +102,14 @@ export default function Dashboard() {
       .catch((err) => {
         if (!ignore) {
           console.error(err);
+          setLoadErrorRepositoryId(selectedRepositoryId);
         }
       });
 
     return () => {
       ignore = true;
     };
-  }, [selectedRepositoryId]);
+  }, [selectedRepositoryId, reloadKey]);
 
   const refreshAnalytics = async () => {
     if (selectedRepositoryId === null) {
@@ -152,6 +155,10 @@ export default function Dashboard() {
         <div className="empty-state">No repositories are connected yet.</div>
       </main>
     );
+  }
+
+  if (loadErrorRepositoryId === selectedRepositoryId) {
+    return <main className="page"><div className="error-state"><strong>Could not load analytics.</strong><button className="secondary-button" type="button" onClick={() => { setLoadErrorRepositoryId(null); setReloadKey((key) => key + 1); }}>Try again</button></div></main>;
   }
 
   if (

@@ -2,13 +2,14 @@
 const issue = {
   id: 1, severity: "high", category: "bug", file: "app/cart.py",
   comment: "An empty cart causes division by zero when calculating the average price.\n\nSuggested Fix:\nReturn zero before dividing when the cart has no items.",
-  status: "RESOLVED", fix_status: "NO_FIX", eligible_for_fix: false,
+  status: "RESOLVED", fix_status: "FIX_COMMITTED", eligible_for_fix: false,
   resolved_by: "Sample follow-up review #2", resolved_at: "2026-09-01T10:00:00Z",
+  fix_commit_sha: "c4e18f2a",
   fix: {
     issue_id: 1, status: "GENERATED", file_path: "app/cart.py",
     start_line: 12, end_line: 12,
     replacement_code: "return sum(item.price for item in items) / len(items) if items else 0",
-    explanation: "Handle the empty collection before dividing. This sample suggestion has not been executed.",
+    explanation: "Handle the empty collection before dividing. Applied in the illustrative sample commit c4e18f2.",
   },
 };
 
@@ -36,10 +37,37 @@ const securityIssue = {
 };
 
 export const demoReviews = [
-  { id: 1, pr_id: 101, summary: "Cart totals: an empty cart can raise ZeroDivisionError. Add a guard before calculating the average price.", issues: [issue], fix_commits: [] },
-  { id: 2, pr_id: 101, summary: "Incremental review: the empty-cart guard addresses the earlier finding. No new issues in the latest change.", issues: [], fix_commits: [] },
-  { id: 4, pr_id: 104, summary: "Checkout and order access: an off-by-one stock check rejects valid orders, and an order lookup is missing its ownership filter. Both findings remain open.", issues: [openBug, securityIssue], fix_commits: [] },
-  { id: 3, pr_id: 103, summary: "Pagination: no actionable issues found in the supplied changes.", issues: [], fix_commits: [] },
+  {
+    id: 1, pr_id: 101, pr_number: 101, pr_title: "Calculate average cart price",
+    review_mode: "Full", created_at: "2026-08-30T09:42:00Z",
+    summary: "Cart totals: an empty cart can raise ZeroDivisionError. Add a guard before calculating the average price.",
+    issues: [issue],
+    fix_commits: [{
+      id: 201, status: "RESOLVED", validation_status: "PASSED",
+      source_head_sha: "7bd921a4", generated_commit_sha: "c4e18f2a",
+      author: "AI Code Review Assistant", requested_issue_count: 1, valid_issue_count: 1,
+      skipped_issue_count: 0, resolved_issue_count: 1, remaining_issue_count: 0,
+      moved_issue_count: 0, new_issue_count: 0, failed_issue_count: 0,
+      applied_issue_ids: [1], verification_status: "COMPLETED",
+      verification_completed_at: "2026-09-01T10:00:00Z",
+      created_at: "2026-08-30T09:46:00Z", updated_at: "2026-09-01T10:00:00Z",
+      issues: [{ issue_id: 1, status: "RESOLVED", generated: true, validated: true, committed: true, original_file: "app/cart.py", original_line: 12 }],
+      new_issues: [],
+    }],
+  },
+  { id: 2, pr_id: 101, pr_number: 101, pr_title: "Calculate average cart price", review_mode: "Incremental", created_at: "2026-09-01T10:00:00Z", summary: "Incremental review: the empty-cart guard addresses the earlier finding. No new issues in the latest change.", issues: [], fix_commits: [] },
+  { id: 4, pr_id: 104, pr_number: 104, pr_title: "Update checkout validation and order lookup", review_mode: "Full", created_at: "2026-09-03T14:18:00Z", summary: "Checkout and order access: an off-by-one stock check rejects valid orders, and an order lookup is missing its ownership filter. Both findings remain open.", issues: [openBug, securityIssue], fix_commits: [{
+    id: 202, status: "FAILED", validation_status: "FAILED", source_head_sha: "a922ce10",
+    author: "AI Code Review Assistant", requested_issue_count: 1, valid_issue_count: 0,
+    skipped_issue_count: 1, resolved_issue_count: 0, remaining_issue_count: 0,
+    moved_issue_count: 0, new_issue_count: 0, failed_issue_count: 0,
+    applied_issue_ids: [], verification_status: "PENDING",
+    created_at: "2026-09-03T14:22:00Z", updated_at: "2026-09-03T14:22:00Z",
+    failure_reason: "The generated edit did not preserve the existing authorization behavior.",
+    issues: [{ issue_id: 3, status: "SKIPPED", generated: true, validated: false, committed: false, original_file: "app/orders.py", original_line: 31, skip_reason: "The generated fix did not pass validation" }],
+    new_issues: [],
+  }] },
+  { id: 3, pr_id: 103, pr_number: 103, pr_title: "Add pagination to the item list", review_mode: "Full", created_at: "2026-09-02T11:05:00Z", summary: "Pagination: no actionable issues found in the supplied changes.", issues: [], fix_commits: [] },
 ];
 
 export const demoDiffs: Record<number, string> = {
@@ -76,6 +104,6 @@ export const demoResponses: Record<string, unknown> = {
       file, total_issues: findings.filter(finding => finding.file === file).length,
     })),
     average_issues_per_pull_request: findings.length / pullRequestCount,
-    average_review_processing_time_seconds: null,
+    average_review_processing_time_seconds: 4.8,
   },
 };
