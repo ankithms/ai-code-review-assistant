@@ -3,6 +3,8 @@ from urllib.parse import quote
 
 import requests
 
+from app.monitoring import monitor_github
+
 TIMEOUT_SECONDS = 15
 GITHUB_API_BASE_URL = "https://api.github.com"
 
@@ -22,6 +24,7 @@ def _split_repository(repository):
     return parts[0], parts[1]
 
 
+@monitor_github("get_pull_request")
 def get_pull_request(
     repository,
     pull_request_number,
@@ -37,6 +40,7 @@ def get_pull_request(
     return response.json()
 
 
+@monitor_github("get_repository")
 def get_repository(repository, access_token):
     response = requests.get(
         f"{GITHUB_API_BASE_URL}/repos/{repository}",
@@ -47,6 +51,7 @@ def get_repository(repository, access_token):
     return response.json()
 
 
+@monitor_github("get_branch")
 def get_branch(repository, branch_name, access_token):
     encoded_branch_name = quote(branch_name, safe="")
     response = requests.get(
@@ -58,6 +63,7 @@ def get_branch(repository, branch_name, access_token):
     return response.json()
 
 
+@monitor_github("get_pr_files")
 def get_pr_files(
     repository,
     pull_request_number,
@@ -97,6 +103,7 @@ def _get_all_pages(url, access_token, params=None):
     return items
 
 
+@monitor_github("get_compare_files")
 def get_compare_files(
     repository,
     base_commit_sha,
@@ -113,6 +120,7 @@ def get_compare_files(
     return response.json().get("files", [])
 
 
+@monitor_github("get_file_content")
 def get_file_content(
     repository,
     file_path,
@@ -136,6 +144,7 @@ def get_file_content(
     }
 
 
+@monitor_github("get_ref")
 def get_ref(repository, branch_name, access_token):
     response = requests.get(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/git/ref/heads/{branch_name}",
@@ -147,6 +156,7 @@ def get_ref(repository, branch_name, access_token):
     return response.json()
 
 
+@monitor_github("update_ref")
 def update_ref(repository, branch_name, sha, access_token, force=False):
     response = requests.patch(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/git/refs/heads/{branch_name}",
@@ -162,6 +172,7 @@ def update_ref(repository, branch_name, sha, access_token, force=False):
     return response.json()
 
 
+@monitor_github("get_git_commit")
 def get_git_commit(repository, commit_sha, access_token):
     response = requests.get(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/git/commits/{commit_sha}",
@@ -173,6 +184,7 @@ def get_git_commit(repository, commit_sha, access_token):
     return response.json()
 
 
+@monitor_github("create_blob")
 def create_blob(repository, content, access_token):
     response = requests.post(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/git/blobs",
@@ -188,6 +200,7 @@ def create_blob(repository, content, access_token):
     return response.json()
 
 
+@monitor_github("create_tree")
 def create_tree(repository, base_tree_sha, tree_items, access_token):
     response = requests.post(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/git/trees",
@@ -203,6 +216,7 @@ def create_tree(repository, base_tree_sha, tree_items, access_token):
     return response.json()
 
 
+@monitor_github("create_commit")
 def create_commit(repository, message, tree_sha, parent_sha, access_token):
     response = requests.post(
         f"{GITHUB_API_BASE_URL}/repos/{repository}/git/commits",
@@ -219,6 +233,7 @@ def create_commit(repository, message, tree_sha, parent_sha, access_token):
     return response.json()
 
 
+@monitor_github("post_pr_comment")
 def post_pr_comment(
     repository,
     pull_request_number,
@@ -239,6 +254,7 @@ def post_pr_comment(
     return response.json()
 
 
+@monitor_github("reply_to_review_comment")
 def reply_to_review_comment(
     repository,
     pull_request_number,
@@ -259,6 +275,7 @@ def reply_to_review_comment(
     return response.json()
 
 
+@monitor_github("post_inline_comment")
 def post_inline_comment(
     repository,
     pull_request_number,
@@ -303,6 +320,7 @@ def post_inline_comment(
     return response.json()
 
 
+@monitor_github("get_review_thread_for_comment")
 def get_review_thread_for_comment(
     repository,
     pull_request_number,

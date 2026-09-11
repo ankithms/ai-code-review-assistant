@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from app.ai.review_service import AIReviewServiceError, review_code
 from app.db.database import SessionLocal
 from app.db.models import FixCommit, Issue, PullRequest, Review
 from app.schemas.output import IssueFixStatus, IssueStatus
+from app.monitoring import JOB_ATTEMPTS, JOB_DURATION, JOB_FAILURES
 from app.github.github_service import (
     get_review_thread_for_comment,
     get_compare_files,
@@ -47,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 def process_review_job(job_id: int) -> None:
+    started = time.perf_counter()
     db = SessionLocal()
     job = None
 
@@ -54,10 +57,12 @@ def process_review_job(job_id: int) -> None:
         job = get_review_job(db, job_id)
 
         if job is None:
+            JOB_ATTEMPTS.labels("not_found").inc()
             logger.error("Review job %s was not found", job_id)
             return
 
         if job.status == SUCCESS:
+            JOB_ATTEMPTS.labels("already_complete").inc()
             logger.info("Review job %s already completed", job_id)
             return
 
@@ -72,8 +77,11 @@ def process_review_job(job_id: int) -> None:
         _process_pull_request_review(db, job)
 
         mark_review_job_success(db, job)
+        JOB_ATTEMPTS.labels("success").inc()
         logger.info("Completed review job %s", job.id)
     except AIReviewServiceError as exc:
+        JOB_ATTEMPTS.labels("failure").inc()
+        JOB_FAILURES.labels(str(exc.retryable).lower(), type(exc).__name__).inc()
         db.rollback()
 
         if job is not None:
@@ -92,6 +100,8 @@ def process_review_job(job_id: int) -> None:
         if exc.retryable:
             raise
     except Exception as exc:
+        JOB_ATTEMPTS.labels("failure").inc()
+        JOB_FAILURES.labels("true", type(exc).__name__).inc()
         db.rollback()
 
         if job is not None:
@@ -104,6 +114,7 @@ def process_review_job(job_id: int) -> None:
         logger.exception("Review job %s failed", job_id)
         raise
     finally:
+        JOB_DURATION.observe(time.perf_counter() - started)
         db.close()
 
 

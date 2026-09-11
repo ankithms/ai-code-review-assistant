@@ -12,6 +12,7 @@ dependencies = [
     "langchain-google-genai>=4.2.3",
     "openai>=2.38.0",
     "psycopg2-binary>=2.9.12",
+    "prometheus-client>=0.22.1",
     "pydantic>=2.13.4",
     "pyyaml>=6.0.3",
     "python-dotenv>=1.2.2",

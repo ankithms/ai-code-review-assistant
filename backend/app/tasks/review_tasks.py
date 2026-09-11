@@ -1,6 +1,10 @@
 import dramatiq
 
+from app.monitoring import start_worker_metrics_server
 from app.queue.broker import redis_broker
+
+
+start_worker_metrics_server()
 
 
 @dramatiq.actor(

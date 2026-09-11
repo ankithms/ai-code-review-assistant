@@ -11,6 +11,7 @@ from app.routes.fixes import router as fixes_router
 from app.routes.fix_commits import router as fix_commits_router
 from app.routes.repositories import router as repositories_router
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import make_asgi_app
 
 
 def _cors_allowed_origins() -> list[str]:
@@ -47,6 +48,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/metrics", make_asgi_app())
 
 app.include_router(auth_router)
 app.include_router(webhook_router)

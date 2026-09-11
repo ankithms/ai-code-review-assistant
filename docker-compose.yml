@@ -51,8 +51,12 @@ services:
       [
         "sh",
         "-c",
-        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB}\"; export REDIS_URL=\"redis://redis:6379/0\"; exec dramatiq app.tasks.review_tasks",
+        "export DATABASE_URL=\"postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/$${POSTGRES_DB}\"; export REDIS_URL=\"redis://redis:6379/0\"; exec dramatiq app.tasks.review_tasks --processes 1",
       ]
+    environment:
+      WORKER_METRICS_PORT: "8001"
+    expose:
+      - "8001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,6 +99,21 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      backend:
+        condition: service_healthy
+      worker:
+        condition: service_started
+
 volumes:
   postgres_data:
   pgadmin_data:
+  prometheus_data:

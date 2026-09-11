@@ -1,0 +1,29 @@
+groups:
+  - name: code-review-assistant
+    rules:
+      - alert: ReviewJobsFailing
+        expr: increase(review_job_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Review jobs are failing
+          description: "{{ $value | humanize }} failed review job attempts in the last 10 minutes."
+
+      - alert: ModelLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le, provider, model) (rate(ai_model_latency_seconds_bucket[10m]))) > 60
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: AI model p95 latency exceeds 60 seconds
+          description: "Provider {{ $labels.provider }} model {{ $labels.model }} has elevated latency."
+
+      - alert: GitHubApiFailureRateHigh
+        expr: sum(rate(github_api_requests_total{outcome="failure"}[10m])) / clamp_min(sum(rate(github_api_requests_total[10m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: GitHub API failure rate exceeds 5%
+          description: "GitHub API requests have had a sustained elevated failure rate."

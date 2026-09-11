@@ -1,8 +1,11 @@
 import asyncio
 import os
 import threading
+import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
+
+from app.monitoring import MODEL_INVOCATIONS, MODEL_LATENCY, ModelUsageCallback, model_identity
 
 
 DEFAULT_AI_MODEL_DEADLINE_SECONDS = 120.0
@@ -83,15 +86,25 @@ def invoke_with_deadline(
     timeout_seconds: float | None = None,
 ):
     deadline = timeout_seconds or _model_deadline_seconds()
+    provider, model = model_identity()
+    started = time.perf_counter()
+    callback_config = {"callbacks": [ModelUsageCallback()]}
     async_invoke = getattr(runnable, "ainvoke", None)
     if not callable(async_invoke):
-        return runnable.invoke(model_input)
+        try:
+            result = _invoke_sync(runnable, model_input, callback_config)
+        except Exception:
+            MODEL_INVOCATIONS.labels(provider, model, "failure").inc()
+            raise
+        else:
+            MODEL_INVOCATIONS.labels(provider, model, "success").inc()
+            return result
+        finally:
+            MODEL_LATENCY.labels(provider, model).observe(time.perf_counter() - started)
 
     async def invoke():
         return await asyncio.wait_for(
-            async_invoke(
-                model_input,
-            ),
+            async_invoke(model_input, config=callback_config),
             timeout=deadline,
         )
 
@@ -105,13 +118,36 @@ def invoke_with_deadline(
         )
 
     try:
-        return _async_runner.run(invoke(), timeout_seconds=deadline)
+        result = _async_runner.run(invoke(), timeout_seconds=deadline)
     except AIModelDeadlineExceeded:
+        MODEL_INVOCATIONS.labels(provider, model, "timeout").inc()
         raise
     except TimeoutError as exc:
+        MODEL_INVOCATIONS.labels(provider, model, "timeout").inc()
         raise AIModelDeadlineExceeded(
             f"AI model invocation exceeded its {deadline:g}-second deadline"
         ) from exc
+    except Exception:
+        MODEL_INVOCATIONS.labels(provider, model, "failure").inc()
+        raise
+    else:
+        MODEL_INVOCATIONS.labels(provider, model, "success").inc()
+        return result
+    finally:
+        MODEL_LATENCY.labels(provider, model).observe(time.perf_counter() - started)
+
+
+def _invoke_sync(runnable, model_input: Any, config: dict):
+    import inspect
+
+    parameters = inspect.signature(runnable.invoke).parameters.values()
+    accepts_config = any(
+        parameter.name == "config" or parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
+    if accepts_config:
+        return runnable.invoke(model_input, config=config)
+    return runnable.invoke(model_input)
 
 
 def _model_deadline_seconds() -> float:
