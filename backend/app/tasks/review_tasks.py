@@ -1,9 +1,11 @@
 import dramatiq
 
+from app.logging import configure_logging
 from app.monitoring import start_worker_metrics_server
 from app.queue.broker import redis_broker
 
 
+configure_logging()
 start_worker_metrics_server()
 
 

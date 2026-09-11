@@ -11,6 +11,7 @@ from app.db.database import SessionLocal
 from app.db.models import FixCommit, Issue, PullRequest, Review
 from app.schemas.output import IssueFixStatus, IssueStatus
 from app.monitoring import JOB_ATTEMPTS, JOB_DURATION, JOB_FAILURES
+from app.logging import logging_context
 from app.github.github_service import (
     get_review_thread_for_comment,
     get_compare_files,
@@ -53,32 +54,47 @@ def process_review_job(job_id: int) -> None:
     db = SessionLocal()
     job = None
 
+    with logging_context(job_id=job_id):
+        try:
+            try:
+                job = get_review_job(db, job_id)
+            except Exception as exc:
+                JOB_ATTEMPTS.labels("failure").inc()
+                JOB_FAILURES.labels("true", type(exc).__name__).inc()
+                db.rollback()
+                logger.exception("Failed to load review job")
+                raise
+
+            if job is None:
+                JOB_ATTEMPTS.labels("not_found").inc()
+                logger.error("Review job was not found")
+                return
+
+            with logging_context(
+                repository=job.repository,
+                pull_request_number=job.pull_request_number,
+                commit_sha=job.commit_sha,
+            ):
+                _process_loaded_review_job(db, job)
+        finally:
+            JOB_DURATION.observe(time.perf_counter() - started)
+            db.close()
+
+
+def _process_loaded_review_job(db, job) -> None:
     try:
-        job = get_review_job(db, job_id)
-
-        if job is None:
-            JOB_ATTEMPTS.labels("not_found").inc()
-            logger.error("Review job %s was not found", job_id)
-            return
-
         if job.status == SUCCESS:
             JOB_ATTEMPTS.labels("already_complete").inc()
-            logger.info("Review job %s already completed", job_id)
+            logger.info("Review job already completed")
             return
 
         mark_review_job_running(db, job)
-        logger.info(
-            "Started review job %s for %s PR #%s",
-            job.id,
-            job.repository,
-            job.pull_request_number,
-        )
-
+        logger.info("Started review job")
         _process_pull_request_review(db, job)
 
         mark_review_job_success(db, job)
         JOB_ATTEMPTS.labels("success").inc()
-        logger.info("Completed review job %s", job.id)
+        logger.info("Completed review job")
     except AIReviewServiceError as exc:
         JOB_ATTEMPTS.labels("failure").inc()
         JOB_FAILURES.labels(str(exc.retryable).lower(), type(exc).__name__).inc()
@@ -92,8 +108,7 @@ def process_review_job(job_id: int) -> None:
                 )
 
         logger.warning(
-            "Review job %s failed due to AI service error retryable=%s: %s",
-            job_id,
+            "Review job failed due to AI service error retryable=%s: %s",
             exc.retryable,
             exc,
         )
@@ -111,11 +126,8 @@ def process_review_job(job_id: int) -> None:
                     db, job.fix_commit_id, str(exc)
                 )
 
-        logger.exception("Review job %s failed", job_id)
+        logger.exception("Review job failed")
         raise
-    finally:
-        JOB_DURATION.observe(time.perf_counter() - started)
-        db.close()
 
 
 def _process_pull_request_review(db, job) -> None:

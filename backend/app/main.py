@@ -17,6 +17,7 @@ from app.routes.fix_commits import router as fix_commits_router
 from app.routes.repositories import router as repositories_router
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
+from app.logging import configure_logging
 
 
 def _cors_allowed_origins() -> list[str]:
@@ -32,11 +33,7 @@ def _cors_allowed_origins() -> list[str]:
     return origins or ["http://localhost:5173", "http://localhost:3000"]
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+configure_logging()
 
 app = FastAPI(
     title="AI Code Review Assistant",
