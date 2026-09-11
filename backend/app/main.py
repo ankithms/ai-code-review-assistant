@@ -1,7 +1,12 @@
 import logging
 import os
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 from app.authentication import require_authenticated_user
+from app.db.session import get_db
+from app.queue.broker import redis_broker
 from app.routes.auth import router as auth_router
 from app.routes.webhook import router as webhook_router
 from app.routes.reviews import router as reviews_router
@@ -68,5 +73,24 @@ def root():
 
 
 @app.get("/healthz", include_in_schema=False)
-def healthz():
+def healthz(db: Session = Depends(get_db)):
+    checks = {"database": False, "redis": False}
+
+    try:
+        db.execute(text("SELECT 1"))
+        checks["database"] = True
+    except Exception:
+        logging.exception("Database readiness check failed")
+
+    try:
+        checks["redis"] = bool(redis_broker.client.ping())
+    except Exception:
+        logging.exception("Redis readiness check failed")
+
+    if not all(checks.values()):
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unavailable", "checks": checks},
+        )
+
     return {"status": "ok"}

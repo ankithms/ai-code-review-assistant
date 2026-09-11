@@ -152,7 +152,7 @@ def test_oauth_callback_rejects_mismatched_state():
 
 
 def test_healthcheck_is_public_but_root_requires_a_session():
-    with _client() as (client, _db):
+    with _client() as (client, _db), patch("app.main.redis_broker.client.ping", return_value=True):
         healthcheck = client.get("/healthz")
         root = client.get("/")
 
