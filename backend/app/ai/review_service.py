@@ -1,23 +1,11 @@
-import os
 import re
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from dotenv import load_dotenv
-
 from app.ai.model_invocation import AIModelDeadlineExceeded, invoke_with_deadline
+from app.ai.provider import create_structured_model
 from app.schemas.output import ReviewResponseSchema
 from app.schemas.review_context import ReviewContext
 
-load_dotenv()
-
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
-    request_timeout=60,
-    retries=2,
-)
-
-model = llm.with_structured_output(ReviewResponseSchema, method="json_schema")
+model = create_structured_model(ReviewResponseSchema)
 
 
 class AIReviewServiceError(RuntimeError):

@@ -64,6 +64,10 @@ DRAMATIQ_REDIS_MAINTENANCE_CHANCE=100000
 GITHUB_ACCESS_TOKEN=...
 GITHUB_WEBHOOK_SECRET=...
 GOOGLE_API_KEY=...
+# AI provider selection. Gemini is currently supported; additional providers can
+# be added behind the provider factory without changing review or fix logic.
+AI_PROVIDER=gemini
+AI_MODEL=gemini-2.5-flash
 # GitHub OAuth credentials for the single dashboard administrator.
 GITHUB_CLIENT_ID=...
 GITHUB_CLIENT_SECRET=...
@@ -71,7 +75,7 @@ ALLOWED_GITHUB_USERS=your-github-login
 # Use false only for local HTTP development; HTTPS deployments must use true.
 SESSION_COOKIE_SECURE=false
 SESSION_MAX_AGE_SECONDS=28800
-# Optional hard deadline for one Gemini review/fix invocation.
+# Optional hard deadline for one AI review/fix invocation.
 AI_MODEL_DEADLINE_SECONDS=120
 # Comma-separated browser origins allowed to call FastAPI directly.
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000

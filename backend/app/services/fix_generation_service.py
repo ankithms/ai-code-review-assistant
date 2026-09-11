@@ -5,7 +5,8 @@ import os
 from sqlalchemy.orm import Session
 
 from app.ai.model_invocation import invoke_with_deadline
-from app.ai.review_service import AIReviewServiceError, ai_service_error, llm
+from app.ai.provider import create_structured_model
+from app.ai.review_service import AIReviewServiceError, ai_service_error
 from app.db.models import Issue
 from app.github.github_service import get_file_content
 from app.schemas.fix_context import FixContext, GeneratedFix
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 GeneratedFixSchema = GeneratedFix
 
-fix_model = llm.with_structured_output(GeneratedFix, method="json_schema")
+fix_model = create_structured_model(GeneratedFix)
 
 
 class FixGenerationService:

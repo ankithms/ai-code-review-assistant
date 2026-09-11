@@ -91,7 +91,6 @@ def invoke_with_deadline(
         return await asyncio.wait_for(
             async_invoke(
                 model_input,
-                automatic_function_calling={"disable": True},
             ),
             timeout=deadline,
         )
