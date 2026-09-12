@@ -20,3 +20,6 @@ frontend/dist/
 project-summary-for-chat.md
 
 docs/
+!/docs/
+/docs/*
+!/docs/deployment-oracle-cloud.md

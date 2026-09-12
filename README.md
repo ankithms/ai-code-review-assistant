@@ -127,6 +127,9 @@ Or run the full stack with Docker Compose:
 docker compose up --build
 ```
 
+For a free-tier, single-host setup, see the
+[Oracle Cloud Always Free deployment guide](docs/deployment-oracle-cloud.md).
+
 The dashboard is then available at `http://localhost:3000`. Nginx serves the
 single-page application and proxies `/api` requests to FastAPI. The Compose
 backend is internal-only; deliver GitHub webhooks through
