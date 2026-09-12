@@ -156,6 +156,10 @@ def get_reviews_for_repository(
     return (
         db.query(Review)
         .join(PullRequest)
+        .options(
+            joinedload(Review.issues),
+            joinedload(Review.pull_request),
+        )
         .filter(PullRequest.repository_id == repository_id)
         .order_by(Review.id.desc())
         .all()

@@ -154,6 +154,14 @@ class Review(Base):
         foreign_keys=[fix_commit_id],
     )
 
+    @property
+    def pr_number(self):
+        return self.pull_request.pull_request_number if self.pull_request else None
+
+    @property
+    def pr_title(self):
+        return self.pull_request.title if self.pull_request else None
+
 
 class Issue(Base):
     __tablename__ = "issues"

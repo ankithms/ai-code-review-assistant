@@ -1,5 +1,21 @@
 import { isDemoMode } from "../demo/mode";
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  CircleAlert,
+  CircleCheckBig,
+  CircleMinus,
+  Clock3,
+  FileWarning,
+  GitPullRequest,
+  RefreshCw,
+  SearchCode,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link, useInRouterContext } from "react-router-dom";
 import { api } from "../services/api";
 import StatCard from "../components/StatCard";
 import { useRepository } from "../context/useRepository";
@@ -34,6 +50,13 @@ type BreakdownItem = {
   color: string;
 };
 
+function DashboardLink({ className, to, children }: { className: string; to: string; children: React.ReactNode }) {
+  const inRouter = useInRouterContext();
+  return inRouter
+    ? <Link className={className} to={to}>{children}</Link>
+    : <span className={className}>{children}</span>;
+}
+
 function Breakdown({
   title,
   items,
@@ -42,20 +65,34 @@ function Breakdown({
   items: BreakdownItem[];
 }) {
   const maxValue = Math.max(...items.map((item) => item.value), 1);
+  const totalValue = items.reduce((total, item) => total + item.value, 0);
 
   return (
-    <section className="panel">
-      <h2 className="panel__title">{title}</h2>
+    <section className="panel analytics-panel">
+      <div className="panel__heading">
+        <h2 className="panel__title">{title}</h2>
+        <span className="panel__meta">{totalValue} total</span>
+      </div>
 
       <div className="breakdown">
         {items.map((item) => (
           <div key={item.label}>
             <div className="breakdown__meta">
               <span>{item.label}</span>
-              <strong>{item.value}</strong>
+              <span>
+                <small>{totalValue > 0 ? Math.round((item.value / totalValue) * 100) : 0}%</small>
+                <strong>{item.value}</strong>
+              </span>
             </div>
 
-            <div className="breakdown__track">
+            <div
+              aria-label={`${item.label}: ${item.value}`}
+              aria-valuemax={maxValue}
+              aria-valuemin={0}
+              aria-valuenow={item.value}
+              className="breakdown__track"
+              role="progressbar"
+            >
               <div
                 className="breakdown__bar"
                 style={{
@@ -181,10 +218,13 @@ export default function Dashboard() {
     analytics.average_review_processing_time_seconds === null
       ? "N/A"
       : `${analytics.average_review_processing_time_seconds}s`;
+  const healthScore = analytics.total_issues === 0
+    ? 100
+    : Math.round((analytics.resolved_issues / analytics.total_issues) * 100);
 
   return (
     <main className="page">
-      <header className="page-header">
+      <header className="page-header page-header--dashboard">
         <div>
           <p className="page-kicker">Overview</p>
           <h1 className="page-title">AI Code Review Dashboard</h1>
@@ -199,65 +239,124 @@ export default function Dashboard() {
         <div className="dashboard-actions">
           <button
             type="button"
-            className="secondary-button"
+            className="secondary-button button-with-icon"
             disabled={isDemoMode() || refreshStatus === "refreshing"}
             title={isDemoMode() ? "Live refresh is disabled in the demo" : undefined}
             onClick={refreshAnalytics}
           >
+            <RefreshCw
+              aria-hidden="true"
+              className={refreshStatus === "refreshing" ? "spin" : undefined}
+              size={15}
+            />
             {refreshStatus === "refreshing"
               ? "Refreshing..."
               : "Refresh statuses"}
           </button>
 
-          {refreshStatus === "success" && (
-            <span className="action-status action-status--success">Updated</span>
-          )}
-
-          {refreshStatus === "error" && (
-            <span className="action-status action-status--error">Refresh failed</span>
-          )}
+          <span aria-live="polite" role="status">
+            {refreshStatus === "success" && (
+              <span className="action-status action-status--success">Updated</span>
+            )}
+            {refreshStatus === "error" && (
+              <span className="action-status action-status--error">Refresh failed</span>
+            )}
+          </span>
         </div>
       </header>
+
+      <section className="health-strip">
+        <div
+          aria-label={`${healthScore}% of findings resolved`}
+          className="health-ring"
+          role="img"
+          style={{ "--health-score": `${healthScore * 3.6}deg` } as React.CSSProperties}
+        >
+          <span><strong>{healthScore}</strong><small>%</small></span>
+        </div>
+        <div className="health-strip__copy">
+          <span className="signal-label"><Sparkles aria-hidden="true" size={14} /> Review health</span>
+          <h2>{healthScore >= 80 ? "Your review queue is in great shape" : healthScore >= 50 ? "Quality is trending in the right direction" : "A few findings need your attention"}</h2>
+          <p>{analytics.resolved_issues} resolved · {analytics.open_issues} open · {analytics.ignored_issues} ignored across {analytics.total_pull_requests} pull requests.</p>
+        </div>
+        <div className="health-strip__signals">
+          <div>
+            <ShieldCheck aria-hidden="true" size={18} />
+            <span><strong>{analytics.high_severity}</strong><small>high priority</small></span>
+          </div>
+          <div>
+            <Clock3 aria-hidden="true" size={18} />
+            <span><strong>~{reviewTime}</strong><small>average review</small></span>
+          </div>
+        </div>
+        <DashboardLink className="primary-button button-with-icon" to="/reviews?filter=open">
+          Triage findings <SearchCode aria-hidden="true" size={15} />
+        </DashboardLink>
+      </section>
 
       <div className="grid stats-grid">
         <StatCard
           title="AI Reviews"
           value={analytics.total_ai_reviews}
+          detail="Automated review runs"
+          icon={Bot}
+          tone="accent"
         />
 
         <StatCard
           title="PRs Reviewed"
           value={analytics.total_pull_requests}
+          detail="Unique pull requests"
+          icon={GitPullRequest}
+          href="/pull-requests"
         />
 
         <StatCard
           title="Issues"
           value={analytics.total_issues}
+          detail="All detected findings"
+          icon={SearchCode}
+          tone="warning"
         />
 
         <StatCard
           title="Avg Issues / PR"
           value={analytics.average_issues_per_pull_request}
+          detail="Finding density"
+          icon={BarChart3}
         />
 
         <StatCard
           title="Avg Review Time"
           value={reviewTime}
+          detail="Processing speed"
+          icon={Activity}
+          tone="accent"
         />
 
         <StatCard
           title="Open Issues"
           value={analytics.open_issues}
+          detail="Needs attention"
+          icon={CircleAlert}
+          tone="danger"
+          href="/reviews?filter=open"
         />
 
         <StatCard
           title="Resolved Issues"
           value={analytics.resolved_issues}
+          detail="Closed findings"
+          icon={CircleCheckBig}
+          tone="success"
+          href="/reviews?filter=resolved"
         />
 
         <StatCard
           title="Ignored Issues"
           value={analytics.ignored_issues}
+          detail="Intentionally dismissed"
+          icon={CircleMinus}
         />
       </div>
 
@@ -282,8 +381,14 @@ export default function Dashboard() {
           ]}
         />
 
-        <section className="panel">
-          <h2 className="panel__title">Top Problem Files</h2>
+        <section className="panel analytics-panel hotspot-panel">
+          <div className="panel__heading">
+            <div>
+              <span className="panel__eyebrow"><FileWarning aria-hidden="true" size={14} /> Hotspots</span>
+              <h2 className="panel__title">Top Problem Files</h2>
+            </div>
+            <span className="panel__meta">By findings</span>
+          </div>
 
           {analytics.top_problematic_files.length === 0 ? (
             <p className="muted">No issue data yet.</p>
@@ -294,7 +399,7 @@ export default function Dashboard() {
                   key={file.file}
                   className="file-row"
                 >
-                  <span className="file-path">{file.file}</span>
+                  <span className="file-path"><span aria-hidden="true" className="file-icon">&lt;/&gt;</span>{file.file}</span>
                   <span className="count-pill">{file.total_issues}</span>
                 </div>
               ))}

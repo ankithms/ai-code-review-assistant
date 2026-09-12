@@ -1,6 +1,23 @@
 import { isDemoMode } from "../demo/mode";
 import { demoDiffs } from "../demo/data";
 import DemoDiff from "../demo/DemoDiff";
+import {
+  ArrowLeft,
+  Bot,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  CircleAlert,
+  Code2,
+  FileCode2,
+  GitCommitHorizontal,
+  ListFilter,
+  LoaderCircle,
+  ShieldAlert,
+  Sparkles,
+  WandSparkles,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../services/api";
@@ -13,6 +30,9 @@ type Issue = {
   severity: string;
   category: string;
   file: string;
+  line?: number | null;
+  line_ref?: string | null;
+  diff_hunk?: string | null;
   comment: string;
   status: string;
   resolved_at?: string | null;
@@ -24,6 +44,8 @@ type Issue = {
   fix_commit_url?: string | null;
   fix_created_at?: string | null;
 };
+
+type FindingFilter = "all" | "open" | "resolved" | "high";
 
 type IssueFix = {
   issue_id: number;
@@ -222,6 +244,8 @@ export default function ReviewDetail() {
   const [fixMessage, setFixMessage] = useState<string | null>(null);
   const [fixCommit, setFixCommit] = useState<FixCommit | null>(null);
   const [fixLoading, setFixLoading] = useState(false);
+  const [findingFilter, setFindingFilter] = useState<FindingFilter>("all");
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [reviewLoadErrorKey, setReviewLoadErrorKey] = useState<string | null>(null);
   const [reviewReloadKey, setReviewReloadKey] = useState(0);
 
@@ -336,6 +360,21 @@ export default function ReviewDetail() {
   const eligibleIssueIds = review?.issues
     .filter((issue) => issue.eligible_for_fix)
     .map((issue) => issue.id) || [];
+  const openIssueCount = review?.issues.filter((issue) => displayIssueStatus(issue) === "OPEN").length || 0;
+  const resolvedIssueCount = review?.issues.filter((issue) => displayIssueStatus(issue) === "RESOLVED").length || 0;
+  const highIssueCount = review?.issues.filter((issue) => issue.severity.toLowerCase() === "high").length || 0;
+  const visibleIssues = review?.issues.filter((issue) => {
+    if (findingFilter === "all") return true;
+    if (findingFilter === "high") return issue.severity.toLowerCase() === "high";
+    return displayIssueStatus(issue).toLowerCase() === findingFilter;
+  }) || [];
+  const activeFixStep = fixCommit && hasCreatedCommit(fixCommit)
+    ? 2
+    : fixPreview
+      ? 1
+      : fixCommit
+        ? 0
+        : -1;
 
   const selectedPayload = () => ({
     issue_ids: selectedIssueIds.length > 0 ? selectedIssueIds : eligibleIssueIds,
@@ -362,6 +401,15 @@ export default function ReviewDetail() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [fixCommit, loadReview, selectedRepositoryId]);
+
+  useEffect(() => {
+    if (!confirmOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setConfirmOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [confirmOpen]);
 
   const toggleIssueSelection = (issue: Issue) => {
     if (!issue.eligible_for_fix) {
@@ -437,13 +485,7 @@ export default function ReviewDetail() {
       return;
     }
 
-    const confirmed = window.confirm(
-      "Commit the selected validated AI fixes directly to this pull request branch?"
-    );
-    if (!confirmed) {
-      return;
-    }
-
+    setConfirmOpen(false);
     setFixLoading(true);
     setFixMessage("Committing AI fixes to this pull request...");
     api.post(
@@ -509,68 +551,109 @@ export default function ReviewDetail() {
 
   return (
     <main className="page">
-      <header className="page-header">
+      <Link className="back-link" to="/reviews">
+        <ArrowLeft aria-hidden="true" size={15} /> All reviews
+      </Link>
+
+      <header className="page-header review-page-header">
         <div>
-          <p className="page-kicker">Review Detail</p>
+          <p className="page-kicker">Review detail</p>
           <h1 className="page-title">Review #{review.id}</h1>
           <p className="page-description">
-            Inspect AI findings, update lifecycle status, and keep the review queue tidy.
+            Inspect AI findings, validate suggested changes, and move this review toward green.
           </p>
           <span className="selected-repository">
             {selectedRepository.full_name}
           </span>
         </div>
+
+        <div className="review-health-card">
+          <div className="review-health-card__score">
+            <span aria-hidden="true" className={openIssueCount > 0 ? "status-orb status-orb--warning" : "status-orb status-orb--success"} />
+            <strong>{openIssueCount > 0 ? "Action needed" : "Review clear"}</strong>
+          </div>
+          <div className="review-health-card__metrics">
+            <span><strong>{openIssueCount}</strong> open</span>
+            <span><strong>{resolvedIssueCount}</strong> resolved</span>
+            <span><strong>{highIssueCount}</strong> high</span>
+          </div>
+        </div>
       </header>
 
-      <section className="panel summary-panel">
-        <h2 className="panel__title">Summary</h2>
-        <p className="issue-comment">{review.summary}</p>
+      <section className="panel summary-panel review-summary-panel">
+        <span className="summary-panel__icon" aria-hidden="true"><Bot size={20} /></span>
+        <div>
+          <p className="page-kicker">AI assessment</p>
+          <h2 className="panel__title">Review summary</h2>
+          <p className="issue-comment">{review.summary}</p>
+        </div>
       </section>
 
-      {isDemoMode() && <section className="panel summary-panel">
-        <h2 className="panel__title">Sample code diff</h2>
-        {review.id === 1 && <p><Link className="link-button" to="/reviews/2">See the follow-up review after the fix →</Link></p>}
+      {isDemoMode() && <section className="panel summary-panel code-panel">
+        <div className="panel__heading">
+          <div>
+            <span className="panel__eyebrow"><Code2 aria-hidden="true" size={14} /> Changed code</span>
+            <h2 className="panel__title">Sample code diff</h2>
+          </div>
+          {review.id === 1 && <Link aria-label="See the follow-up review after the fix →" className="link-button button-with-icon" to="/reviews/2">Follow-up review <ChevronRight aria-hidden="true" size={14} /></Link>}
+        </div>
         <DemoDiff diff={demoDiffs[review.id]} />
-        <p className="page-description">Suggested replacements appear with each finding below. These illustrative fixes have not been executed.</p>
+        <p className="code-panel__note"><Sparkles aria-hidden="true" size={14} /> Suggested replacements appear with each finding below. These illustrative fixes have not been executed.</p>
       </section>}
 
-      <section className="panel fix-panel">
-        <div>
-          <p className="page-kicker">AI Fix Commit</p>
-          <h2 className="panel__title">Selected Fixes</h2>
-          <p className="page-description">
+      <section className="panel fix-panel fix-workflow">
+        <div className="fix-workflow__heading">
+          <div>
+            <p className="page-kicker">AI fix workflow</p>
+            <h2 className="panel__title">From finding to verified commit</h2>
+            <p className="page-description">
             {isDemoMode() ? "Live actions are disabled. Explore the saved sample suggestions below." : "Generate structured line-range fixes, preview validation results, then commit them to this Pull Request."}
-          </p>
+            </p>
+          </div>
+          <span className="ai-chip"><WandSparkles aria-hidden="true" size={14} /> AI assisted</span>
         </div>
+
+        <ol className="fix-stepper" aria-label="AI fix workflow progress">
+          {["Generate", "Validate", "Commit"].map((label, index) => (
+            <li
+              className={index <= activeFixStep ? "fix-step fix-step--complete" : index === activeFixStep + 1 ? "fix-step fix-step--active" : "fix-step"}
+              key={label}
+            >
+              <span>{index <= activeFixStep ? <Check aria-hidden="true" size={14} /> : index + 1}</span>
+              <div><strong>{label}</strong><small>{index === 0 ? "Create edits" : index === 1 ? "Check safety" : "Apply changes"}</small></div>
+            </li>
+          ))}
+        </ol>
 
         <div className="fix-actions">
           <button
             type="button"
-            className="primary-button"
+            className="primary-button button-with-icon"
             onClick={generateFixes}
             disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
           >
+            {fixLoading ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <WandSparkles aria-hidden="true" size={15} />}
             Generate Fixes
           </button>
           <button
             type="button"
-            className="secondary-button"
+            className="secondary-button button-with-icon"
             onClick={previewFixes}
             disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
           >
-            Preview
+            <Code2 aria-hidden="true" size={15} /> Preview
           </button>
           <button
             type="button"
-            className="danger-button"
-            onClick={commitAiFix}
+            className="danger-button button-with-icon"
+            onClick={() => setConfirmOpen(true)}
             disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
           >
-            Commit AI Fix
+            <GitCommitHorizontal aria-hidden="true" size={15} /> Commit AI Fix
           </button>
         </div>
 
-        <p className="fix-message">
+        <p aria-live="polite" className="fix-message" role="status">
           {(isDemoMode() ? "Read-only sample. Suggested code is shown with each finding." : fixMessage) || (
             selectedIssueIds.length > 0
               ? `${selectedIssueIds.length} issue${selectedIssueIds.length === 1 ? "" : "s"} selected.`
@@ -643,6 +726,38 @@ export default function ReviewDetail() {
           </div>
         )}
       </section>
+
+      {confirmOpen && (
+        <div className="modal-backdrop" onMouseDown={() => setConfirmOpen(false)}>
+          <section
+            aria-labelledby="commit-confirm-title"
+            aria-modal="true"
+            className="confirm-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <button aria-label="Close confirmation" className="icon-button confirm-modal__close" onClick={() => setConfirmOpen(false)} type="button">
+              <X aria-hidden="true" size={18} />
+            </button>
+            <span className="confirm-modal__icon" aria-hidden="true"><GitCommitHorizontal size={23} /></span>
+            <p className="page-kicker">Final check</p>
+            <h2 id="commit-confirm-title">Commit validated AI fixes?</h2>
+            <p>
+              This will apply {selectedIssueIds.length || eligibleIssueIds.length} selected finding{(selectedIssueIds.length || eligibleIssueIds.length) === 1 ? "" : "s"} directly to the pull request branch.
+            </p>
+            <div className="confirm-modal__note">
+              <CheckCircle2 aria-hidden="true" size={17} />
+              Only fixes that pass validation will be committed.
+            </div>
+            <div className="confirm-modal__actions">
+              <button autoFocus className="secondary-button" onClick={() => setConfirmOpen(false)} type="button">Cancel</button>
+              <button className="danger-button button-with-icon" onClick={commitAiFix} type="button">
+                <GitCommitHorizontal aria-hidden="true" size={15} /> Commit AI Fix
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {review.fix_commits.length > 0 && (
         <section className="panel fix-activity">
@@ -741,33 +856,65 @@ export default function ReviewDetail() {
         </section>
       )}
 
-      <section>
-        <div className="page-header">
+      <section className="findings-section">
+        <div className="findings-heading">
           <div>
             <p className="page-kicker">Findings</p>
-            <h2 className="panel__title">{review.issues.length} Issues</h2>
+            <h2 className="section-title">Review findings</h2>
+            <span className="finding-count">{review.issues.length} Issues</span>
+            <p className="page-description">Prioritize risk, inspect the evidence, and select safe fixes.</p>
+          </div>
+          <div className="findings-heading__stats">
+            <span><CircleAlert aria-hidden="true" size={15} /> <strong>{openIssueCount}</strong> open</span>
+            <span><ShieldAlert aria-hidden="true" size={15} /> <strong>{highIssueCount}</strong> high</span>
           </div>
         </div>
 
+        {review.issues.length > 0 && (
+          <div className="finding-toolbar">
+            <div className="filter-chips" role="group" aria-label="Filter findings">
+              {([
+                ["all", "All", ListFilter],
+                ["open", "Open", CircleAlert],
+                ["high", "High", ShieldAlert],
+                ["resolved", "Resolved", CheckCircle2],
+              ] as const).map(([value, label, Icon]) => (
+                <button
+                  aria-pressed={findingFilter === value}
+                  className={findingFilter === value ? "filter-chip filter-chip--active" : "filter-chip"}
+                  key={value}
+                  onClick={() => setFindingFilter(value)}
+                  type="button"
+                >
+                  <Icon aria-hidden="true" size={14} /> {label}
+                </button>
+              ))}
+            </div>
+            <div className="finding-toolbar__selection">
+              <span aria-live="polite">{selectedIssueIds.length} selected</span>
+              <button className="text-button" disabled={isDemoMode() || eligibleIssueIds.length === 0} onClick={() => setSelectedIssueIds(eligibleIssueIds)} type="button">Select eligible</button>
+              {selectedIssueIds.length > 0 && <button className="text-button" onClick={() => setSelectedIssueIds([])} type="button">Clear</button>}
+            </div>
+          </div>
+        )}
+
         <div className="issues-list">
-          {review.issues.map((issue) => {
+          {visibleIssues.map((issue, index) => {
             const displayStatus = displayIssueStatus(issue);
             const resolution = formatResolution(issue);
 
             return (
               <article
                 key={issue.id}
-                className={
-                  displayStatus === "RESOLVED"
-                    ? "issue-card issue-card--resolved"
-                    : "issue-card"
-                }
+                className={`issue-card issue-card--${issue.severity.toLowerCase()}${displayStatus === "RESOLVED" ? " issue-card--resolved" : ""}`}
+                style={{ animationDelay: `${Math.min(index * 45, 180)}ms` }}
               >
                 <div className="issue-card__top">
                   <div className="issue-card__badges">
                     <label className="issue-select">
                       <input
                         type="checkbox"
+                        aria-label={`${selectedIssueIds.includes(issue.id) ? "Deselect" : "Select"} issue ${issue.id} for AI fix`}
                         disabled={isDemoMode() || !issue.eligible_for_fix}
                         checked={selectedIssueIds.includes(issue.id)}
                         onChange={() => toggleIssueSelection(issue)}
@@ -781,7 +928,7 @@ export default function ReviewDetail() {
                     </span>
                   </div>
 
-                  <div className="status-control">
+                  <div aria-label={`Status for issue ${issue.id}`} className="status-control" role="group">
                     {(["OPEN", "RESOLVED", "IGNORED"] as const).map((status) => (
                       <button
                         key={status}
@@ -808,7 +955,7 @@ export default function ReviewDetail() {
 
                   <div className="meta-item">
                     <span className="meta-label">File</span>
-                    <span className="meta-value">{issue.file}</span>
+                    <span className="meta-value meta-value--code"><FileCode2 aria-hidden="true" size={14} />{issue.file}{issue.line ? `:${issue.line}` : ""}</span>
                   </div>
 
                   {resolution && (
@@ -820,6 +967,13 @@ export default function ReviewDetail() {
                 </div>
 
                 <p className="issue-comment">{issue.comment}</p>
+
+                {issue.diff_hunk && (
+                  <details className="source-context">
+                    <summary><Code2 aria-hidden="true" size={14} /> View source context</summary>
+                    <pre className="fix-code">{issue.diff_hunk}</pre>
+                  </details>
+                )}
 
                 {issue.fix_commit_sha && (
                   <div className="fix-tracking-note">
@@ -837,9 +991,9 @@ export default function ReviewDetail() {
                 {issue.fix && (
                   <div className="fix-summary">
                     <div className="fix-summary__line">
-                      <strong>{issue.fix.file_path}</strong>
+                      <strong><WandSparkles aria-hidden="true" size={15} /> Suggested change</strong>
                       <span>
-                        lines {issue.fix.start_line}-{issue.fix.end_line}
+                        {issue.fix.file_path} · lines {issue.fix.start_line}-{issue.fix.end_line}
                       </span>
                     </div>
                     {issue.fix.explanation && (
@@ -855,12 +1009,26 @@ export default function ReviewDetail() {
           })}
         </div>
 
-        {review.issues.length === 0 && (
-          <div className="empty-state">
-            This review did not report any issues.
+        {visibleIssues.length === 0 && (
+          <div className="empty-state empty-state--large clean-state">
+            <span className="empty-state__icon"><Sparkles aria-hidden="true" size={22} /></span>
+            <h2>{review.issues.length === 0 ? "No issues found" : "No findings in this view"}</h2>
+            <p>{review.issues.length === 0 ? "This review did not report any issues." : "Choose another filter to see the remaining findings."}</p>
+            {review.issues.length > 0 && <button className="secondary-button" onClick={() => setFindingFilter("all")} type="button">Show all findings</button>}
           </div>
         )}
       </section>
+
+      {selectedIssueIds.length > 0 && !isDemoMode() && (
+        <aside aria-label="Selected findings actions" className="selection-dock">
+          <span className="selection-dock__count"><strong>{selectedIssueIds.length}</strong> selected</span>
+          <span className="selection-dock__copy">Ready for an AI-assisted fix</span>
+          <button className="primary-button button-with-icon" disabled={fixLoading} onClick={generateFixes} type="button">
+            <WandSparkles aria-hidden="true" size={15} /> Generate fixes
+          </button>
+          <button aria-label="Clear selected findings" className="icon-button" onClick={() => setSelectedIssueIds([])} type="button"><X aria-hidden="true" size={17} /></button>
+        </aside>
+      )}
     </main>
   );
 }

@@ -119,10 +119,23 @@ class PullRequestResponse(BaseModel):
     }
 
 
+class ReviewListIssueResponse(BaseModel):
+    severity: str
+    status: IssueStatus
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
 class ReviewListResponse(BaseModel):
     id: int
     pr_id: int
     summary: str
+    created_at: datetime
+    pr_number: int | None = None
+    pr_title: str | None = None
+    issues: list[ReviewListIssueResponse] = Field(default_factory=list)
 
     model_config = {
         "from_attributes": True
