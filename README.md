@@ -79,6 +79,8 @@ SESSION_MAX_AGE_SECONDS=28800
 AI_MODEL_DEADLINE_SECONDS=120
 # Comma-separated browser origins allowed to call FastAPI directly.
 CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+SOURCE_SNIPPET_RETENTION_DAYS=30
+REVIEW_DATA_RETENTION_DAYS=365
 ```
 
 Start from the checked-in template and replace all placeholder credentials:
@@ -244,3 +246,35 @@ from the administrator's selection.
 For a frontend-only preview, run `cd frontend && pnpm run dev` and visit
 `http://localhost:5173/demo/`. No new credentials or database migrations are
 needed. This change adds the demo route; it does not deploy the application.
+
+## Data retention
+
+Repository files and pull-request diffs are fetched for processing and are not
+stored as complete files. The database does store the minimum excerpts needed to
+show and apply a finding: diff hunks, suggested replacement code, and additional
+edit payloads. By default these source-bearing fields are irreversibly set to
+`NULL` 30 days after the review was created. After 365 days, the remaining
+human-readable review content is also scrubbed: the summary, finding comment and
+impact, fix explanation, file paths, and line reference.
+
+Relational rows and non-content operational metadata remain after scrubbing so
+foreign-key relationships, aggregate severity/category/status analytics,
+idempotency, and GitHub audit identifiers continue to work. Purging the database
+does not remove comments already posted to GitHub; those follow the repository's
+GitHub retention policy. Backups and replicas must use expiry windows no longer
+than the corresponding live-data windows.
+
+The cleanup is an operator-scheduled job. Run it at least daily after applying
+migrations:
+
+```bash
+cd backend
+uv run python -m app.data_retention --dry-run
+uv run python -m app.data_retention
+```
+
+Set `SOURCE_SNIPPET_RETENTION_DAYS` and `REVIEW_DATA_RETENTION_DAYS` to positive
+day counts to change the defaults. The review window cannot be shorter than the
+source window. Runs are idempotent. Legal holds are not implemented and require
+suspending this job and preserving the relevant database and backups through an
+external, access-controlled process.

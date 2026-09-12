@@ -109,6 +109,13 @@ class Review(Base):
     __tablename__ = "reviews"
 
     id = Column(Integer, primary_key=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+    source_purged_at = Column(DateTime(timezone=True), nullable=True)
+    data_purged_at = Column(DateTime(timezone=True), nullable=True)
 
     pr_id = Column(
         Integer,
