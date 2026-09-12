@@ -154,7 +154,7 @@ class LiveReviewFlowEndToEndTests(unittest.TestCase):
         last_error = None
         while time.monotonic() < deadline:
             try:
-                response = requests.get(f"{BASE_URL}/healthz", timeout=2)
+                response = requests.get(f"{BASE_URL}/readyz", timeout=2)
                 if response.status_code == 200:
                     return
                 last_error = f"API returned HTTP {response.status_code}"

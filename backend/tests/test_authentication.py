@@ -151,12 +151,14 @@ def test_oauth_callback_rejects_mismatched_state():
     assert response.json()["detail"] == "Invalid OAuth state"
 
 
-def test_healthcheck_is_public_but_root_requires_a_session():
+def test_health_endpoints_are_public_but_root_requires_a_session():
     with _client() as (client, _db), patch("app.main.redis_broker.client.ping", return_value=True):
-        healthcheck = client.get("/healthz")
+        liveness = client.get("/livez")
+        readiness = client.get("/readyz")
         root = client.get("/")
 
-    assert healthcheck.json() == {"status": "ok"}
+    assert liveness.json() == {"status": "ok"}
+    assert readiness.json() == {"status": "ok"}
     assert root.status_code == 401
 
 

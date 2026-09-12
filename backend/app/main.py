@@ -69,8 +69,13 @@ def root():
     }
 
 
-@app.get("/healthz", include_in_schema=False)
-def healthz(db: Session = Depends(get_db)):
+@app.get("/livez", include_in_schema=False)
+def livez():
+    return {"status": "ok"}
+
+
+@app.get("/readyz", include_in_schema=False)
+def readyz(db: Session = Depends(get_db)):
     checks = {"database": False, "redis": False}
 
     try:

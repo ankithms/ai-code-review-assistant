@@ -150,7 +150,7 @@ Build and start the Arm-compatible containers:
 ```bash
 docker compose up --build -d
 docker compose ps
-curl --fail http://127.0.0.1:3000/api/healthz
+curl --fail http://127.0.0.1:3000/api/readyz
 ```
 
 The backend applies Alembic migrations before starting. A healthy response is
@@ -175,7 +175,7 @@ Validate and reload Caddy:
 ```bash
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
-curl --fail https://review.example.com/api/healthz
+curl --fail https://review.example.com/api/readyz
 ```
 
 Caddy obtains and renews TLS certificates automatically after DNS resolves to
@@ -203,7 +203,7 @@ Update the application after taking a backup:
 git pull --ff-only
 docker compose up --build -d
 docker compose ps
-curl --fail https://review.example.com/api/healthz
+curl --fail https://review.example.com/api/readyz
 ```
 
 Create a compressed PostgreSQL backup outside the container:
@@ -248,4 +248,3 @@ Then open `http://127.0.0.1:9090` on the local computer.
 - Set an OCI budget alert at a very small amount. Alerts warn about charges but
   do not automatically stop paid resources.
 - Recheck OCI's Free Tier terms before resizing or recreating the VM.
-

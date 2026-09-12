@@ -148,7 +148,7 @@ database-backed session cookie.
 
 Set `SESSION_COOKIE_SECURE=true` for every HTTPS deployment. All review,
 analytics, pull-request, repository, and AI-fix APIs require that session;
-only the signed GitHub webhook and `/healthz` remain public.
+only the signed GitHub webhook and `/livez` and `/readyz` health endpoints remain public.
 
 If FastAPI is running directly on `http://localhost:8000`, set
 `LOGIN_SUCCESS_REDIRECT=http://localhost:5173/` so the OAuth callback returns
