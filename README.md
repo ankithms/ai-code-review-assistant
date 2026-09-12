@@ -4,6 +4,14 @@
 
 An AI-powered developer tool that automatically reviews GitHub pull requests, analyzes code diffs using Google's Gemini models, identifies potential bugs, security vulnerabilities, performance concerns, and code quality issues, then posts structured review feedback directly on the pull request.
 
+> **Privacy notice:** Reviews and generated fixes send selected repository code
+> and pull-request data to the configured external AI provider (currently Google
+> Gemini). This includes private repository content when a private repository is
+> connected. Obtain the repository owner's authorization and verify the
+> provider account's data-use and retention terms before enabling it. See
+> [Privacy and private repositories](PRIVACY.md) for the data sent, retention
+> boundaries, and operator responsibilities.
+
 ## Features
 
 * GitHub Pull Request webhook integration
@@ -248,6 +256,11 @@ For a frontend-only preview, run `cd frontend && pnpm run dev` and visit
 needed. This change adds the demo route; it does not deploy the application.
 
 ## Data retention
+
+These local retention controls are only one part of the privacy model. They do
+not delete prompts or responses retained by the configured AI provider, or
+content already posted to GitHub. See [Privacy and private repositories](PRIVACY.md)
+before connecting a private repository.
 
 Repository files and pull-request diffs are fetched for processing and are not
 stored as complete files. The database does store the minimum excerpts needed to
