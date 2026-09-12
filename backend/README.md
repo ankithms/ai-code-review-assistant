@@ -4,8 +4,11 @@ The API exposes Prometheus metrics at `/metrics/`. The Dramatiq worker exposes
 its metrics on port `8001` inside the Compose network. Configure Prometheus to
 scrape `backend:8000/metrics/` and `worker:8001/metrics`.
 The included Compose stack does this automatically and makes Prometheus
-available at `http://localhost:9090`; alert rules cover job failures, model p95
-latency above 60 seconds, and a sustained GitHub API failure rate above 5%.
+available at `http://localhost:9090`. The included Prometheus alert rules cover
+repeated retryable job failures, terminal job failures, model p95 latency above
+60 seconds, and a sustained GitHub API failure rate above 5%. The stack does not
+include Alertmanager, so these rules are visible in Prometheus but do not send
+email, Slack, or other notifications.
 
 The application reports:
 

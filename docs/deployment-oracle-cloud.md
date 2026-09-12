@@ -238,6 +238,11 @@ ssh -L 9090:127.0.0.1:9090 ubuntu@VM_PUBLIC_IP
 
 Then open `http://127.0.0.1:9090` on the local computer.
 
+The Compose stack loads Prometheus alert rules, but it does not include
+Alertmanager. Firing rules are visible in the Prometheus UI and do not send
+email, Slack, or other notifications. Add and configure Alertmanager before
+relying on these rules for operational notification.
+
 ## Staying within Always Free
 
 - Keep compute and storage totals within the current Always Free limits.
