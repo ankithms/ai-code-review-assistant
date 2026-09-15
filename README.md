@@ -55,7 +55,12 @@ This project aims to streamline code reviews by providing instant AI-powered fee
 
 ## Background Processing
 
-Pull request webhooks are handled asynchronously. The FastAPI webhook endpoint validates the GitHub signature and payload, creates a `review_jobs` row, pushes the job to Redis through Dramatiq, and returns immediately. A separate worker process fetches the pull request details, runs the Gemini review, stores results, and posts GitHub comments.
+Pull request webhooks are handled asynchronously. The FastAPI webhook endpoint validates the GitHub signature and payload, pushes work to Redis through Dramatiq, and returns immediately. A separate worker process fetches pull request details, runs Gemini reviews or `/ai-fix` commands, stores results, and posts GitHub comments. Native fix commands commit directly to the existing pull request source branch. A committed fix remains pending until GitHub delivers the resulting `synchronize` webhook and its follow-up review verifies the finding.
+
+Supported GitHub commands are `/ai-fix` as a reply to an inline AI finding,
+`/ai-fix all`, `/ai-fix open`, and `/ai-fix <issue-id>`. Re-delivery of the same
+GitHub comment is idempotent. To explicitly retry a FAILED or STALE attempt, post
+a new command comment after addressing the reported cause.
 
 `GITHUB_WEBHOOK_SECRET` is mandatory. The webhook endpoint fails closed with
 HTTP 503 when verification is not configured and rejects missing or invalid

@@ -5,7 +5,7 @@ import json
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -59,7 +59,7 @@ class GithubWebhookIncrementalTests(unittest.TestCase):
         with patch.dict(os.environ, {"GITHUB_WEBHOOK_SECRET": WEBHOOK_SECRET}):
             webhook.verify_github_signature(request, body)
 
-    def test_pull_request_review_comment_ai_fix_command_dispatches_to_native_handler(self):
+    def test_pull_request_review_comment_ai_fix_command_is_acknowledged_and_queued(self):
         payload = {
             "action": "created",
             "repository": {
@@ -91,24 +91,19 @@ class GithubWebhookIncrementalTests(unittest.TestCase):
                     "GITHUB_ACCESS_TOKEN": "token",
                 },
             ),
-            patch.object(webhook, "handle_github_native_fix_comment", return_value=True) as handle_native_fix,
+            patch.object(webhook.process_github_native_fix_command, "send") as enqueue_fix,
         ):
             response = asyncio.run(webhook.github_webhook(request, SimpleNamespace()))
 
         self.assertEqual(
             response,
             {
-                "status": "tracked",
+                "status": "queued",
                 "action": "created",
                 "event": "pull_request_review_comment",
             },
         )
-        handle_native_fix.assert_called_once_with(
-            db=ANY,
-            payload=payload,
-            event="pull_request_review_comment",
-            access_token="token",
-        )
+        enqueue_fix.assert_called_once_with(payload, "pull_request_review_comment")
 
     def test_synchronize_webhook_stores_incremental_commit_range(self):
         payload = {

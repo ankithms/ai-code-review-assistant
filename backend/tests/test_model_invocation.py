@@ -68,3 +68,11 @@ def test_sync_runnable_does_not_start_or_require_an_event_loop():
             return value.upper()
 
     assert invoke_with_deadline(SyncRunnable(), "ok", timeout_seconds=1) == "OK"
+
+
+def test_async_model_bridge_rejects_calls_from_an_active_event_loop():
+    async def call_from_webhook_loop():
+        with pytest.raises(RuntimeError, match="outside an active asyncio event loop"):
+            invoke_with_deadline(LoopBoundRunnable(), "fix", timeout_seconds=1)
+
+    asyncio.run(call_from_webhook_loop())

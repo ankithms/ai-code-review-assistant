@@ -950,7 +950,7 @@ def _format_issue_comment_body(
             "",
             fallback_text,
             "",
-            "Reply `/ai-fix` to create a separate AI Fix PR for this finding.",
+            "Reply `/ai-fix` to commit a generated fix to this Pull Request's source branch.",
         ])
 
     return "\n".join(parts)

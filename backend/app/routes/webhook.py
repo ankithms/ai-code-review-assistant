@@ -18,9 +18,9 @@ from app.repositories.review_job_repository import (
     mark_review_job_failed,
 )
 from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
-from app.services.github_native_fix_service import handle_github_native_fix_comment
+from app.services.github_native_fix_service import is_github_native_fix_comment
 from app.services.fix_commit_tracking_service import FixCommitTrackingService
-from app.tasks.review_tasks import process_review_job
+from app.tasks.review_tasks import process_github_native_fix_command, process_review_job
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +49,23 @@ async def github_webhook(
     event = request.headers.get("X-GitHub-Event")
 
     if event in {"issue_comment", "pull_request_review_comment"} and action == "created":
-        if handle_github_native_fix_comment(
-            db=db,
-            payload=payload,
-            event=event,
-            access_token=os.getenv("GITHUB_ACCESS_TOKEN"),
-        ):
+        if is_github_native_fix_comment(payload, event):
+            if not os.getenv("GITHUB_ACCESS_TOKEN"):
+                logger.error("Cannot enqueue GitHub-native AI fix command without an access token")
+                raise HTTPException(
+                    status_code=503,
+                    detail="GitHub-native AI fixes are unavailable",
+                )
+            try:
+                process_github_native_fix_command.send(payload, event)
+            except Exception as exc:
+                logger.exception("Failed to enqueue GitHub-native AI fix command")
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI fix queue is unavailable",
+                ) from exc
             return {
-                "status": "tracked",
+                "status": "queued",
                 "action": action,
                 "event": event,
             }

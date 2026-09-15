@@ -80,8 +80,19 @@ class FixCommitTrackingService:
         source_head_sha: str,
         source_branch: str,
         requested_by: str | None = None,
+        request_key: str | None = None,
         retry: bool = False,
     ) -> tuple[FixCommit, bool]:
+        if request_key:
+            existing_request = (
+                db.query(FixCommit)
+                .options(joinedload(FixCommit.issue_links))
+                .filter(FixCommit.request_key == request_key)
+                .one_or_none()
+            )
+            if existing_request is not None:
+                return existing_request, False
+
         issue_ids = sorted(issue.id for issue in issues)
         issue_by_id = {issue.id: issue for issue in issues}
         identity = self.identity(
@@ -110,6 +121,7 @@ class FixCommitTrackingService:
             source_head_sha=source_head_sha,
             source_branch=source_branch,
             idempotency_key=identity,
+            request_key=request_key,
             attempt=attempt,
             requested_issue_count=len(issue_ids),
             applied_issue_ids=json.dumps(issue_ids),
@@ -148,6 +160,15 @@ class FixCommitTrackingService:
             db.commit()
         except IntegrityError:
             db.rollback()
+            if request_key:
+                duplicate_request = (
+                    db.query(FixCommit)
+                    .options(joinedload(FixCommit.issue_links))
+                    .filter(FixCommit.request_key == request_key)
+                    .one_or_none()
+                )
+                if duplicate_request is not None:
+                    return duplicate_request, False
             concurrent = (
                 db.query(FixCommit)
                 .options(joinedload(FixCommit.issue_links))

@@ -88,6 +88,17 @@ class ReviewPromptFormattingTests(unittest.TestCase):
         self.assertIn("service timed out", str(context.exception))
         self.assertIn("will be retried", str(context.exception))
 
+    def test_internal_invocation_error_is_not_retryable_or_provider_capacity(self):
+        error = review_service.ai_service_error(
+            RuntimeError("invoke_with_deadline must be called outside an active asyncio event loop"),
+            operation="AI fix generation",
+            retry_message="Please retry.",
+        )
+
+        self.assertFalse(error.retryable)
+        self.assertEqual(error.error_type, "internal")
+        self.assertNotIn("capacity", str(error).lower())
+
 
 class _SlowAsyncReviewModel:
     async def ainvoke(self, prompt, **kwargs):

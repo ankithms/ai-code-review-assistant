@@ -942,7 +942,11 @@ class GithubCommentPostingTests(unittest.TestCase):
             "This issue requires multiple coordinated changes and cannot be applied as a GitHub Suggestion.",
             body,
         )
-        self.assertIn("Reply `/ai-fix` to create a separate AI Fix PR", body)
+        self.assertIn(
+            "Reply `/ai-fix` to commit a generated fix to this Pull Request's source branch",
+            body,
+        )
+        self.assertNotIn("separate AI Fix PR", body)
 
     def test_formats_inline_comment_with_impact_from_comment_text(self):
         issue = SimpleNamespace(

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session, joinedload
 
 from app.ai.review_service import AIReviewServiceError
-from app.db.models import Issue, PullRequest, Repository, Review
+from app.db.models import FixCommit, Issue, PullRequest, Repository, Review
 from app.github.github_service import post_pr_comment, reply_to_review_comment
 from app.repositories.review_repository import get_latest_review_for_pull_request
 from app.routes.fixes import (
@@ -44,8 +44,7 @@ def handle_github_native_fix_comment(
         logger.warning("Skipping GitHub-native AI fix command because no access token is configured")
         return False
 
-    command = _parse_fix_command(payload)
-    if command is None:
+    if not AI_FIX_COMMAND_PATTERN.match(((payload.get("comment") or {}).get("body") or "")):
         return False
 
     repository = (payload.get("repository") or {}).get("full_name")
@@ -54,8 +53,12 @@ def handle_github_native_fix_comment(
         return False
 
     response_target = _response_target_from_payload(payload, event)
+    request_key = _request_key_from_payload(payload, event)
 
     try:
+        command = _parse_fix_command(payload)
+        if command is None:
+            return False
         result_message = _run_fix_command(
             db=db,
             repository=repository,
@@ -63,31 +66,27 @@ def handle_github_native_fix_comment(
             command=command,
             access_token=access_token,
             payload=payload,
+            request_key=request_key,
         )
     except AIReviewServiceError as exc:
         db.rollback()
         logger.warning(
-            "GitHub-native AI fix command could not reach the AI provider "
-            "retryable=%s: %s",
+            "GitHub-native AI fix command failed error_type=%s retryable=%s: %s",
+            exc.error_type,
             exc.retryable,
             exc,
         )
-        if exc.retryable:
-            result_message = (
-                "**AI Fix temporarily unavailable**\n\n"
-                "The AI provider is currently busy. No code or branch was changed. "
-                "Please run the `/ai-fix` command again later."
-            )
-        else:
-            result_message = (
-                "**AI Fix paused**\n\n"
-                f"{exc}"
-            )
+        result_message = _ai_failure_message(exc)
+    except (ValueError, StaleHeadError) as exc:
+        db.rollback()
+        result_message = f"**AI Fix paused**\n\n{exc}"
     except Exception as exc:
+        db.rollback()
         logger.exception("GitHub-native AI fix command failed")
         result_message = (
             "**AI Fix failed**\n\n"
-            f"{exc}"
+            "An internal error prevented this command from completing. Check the worker "
+            "logs and confirm whether GitHub accepted a commit before retrying."
         )
 
     _post_command_response(
@@ -98,6 +97,15 @@ def handle_github_native_fix_comment(
         body=result_message,
     )
     return True
+
+
+def is_github_native_fix_comment(payload: dict, event: str | None) -> bool:
+    """Validate the cheap, local parts of a command before enqueueing it."""
+    comment = payload.get("comment") or {}
+    if not AI_FIX_COMMAND_PATTERN.match(comment.get("body") or ""):
+        return False
+    repository = (payload.get("repository") or {}).get("full_name")
+    return bool(repository and _pull_request_number_from_payload(payload, event))
 
 
 def _parse_fix_command(payload: dict) -> NativeFixCommand | None:
@@ -132,6 +140,7 @@ def _run_fix_command(
     command: NativeFixCommand,
     access_token: str,
     payload: dict,
+    request_key: str | None = None,
 ) -> str:
     pull_request_record = _get_pull_request_record(
         db=db,
@@ -140,6 +149,15 @@ def _run_fix_command(
     )
     if pull_request_record is None:
         raise ValueError("This pull request has not been reviewed by the AI assistant yet.")
+
+    if request_key:
+        duplicate = (
+            db.query(FixCommit)
+            .filter(FixCommit.request_key == request_key)
+            .one_or_none()
+        )
+        if duplicate is not None:
+            return _existing_request_message(duplicate)
 
     review = get_latest_review_for_pull_request(
         db=db,
@@ -177,19 +195,14 @@ def _run_fix_command(
         source_head_sha=target_head_sha,
         source_branch=pull_request["head"]["ref"],
         requested_by=commenter,
+        request_key=request_key,
         # Posting a new command is an explicit user retry. The tracking service
         # still deduplicates active/successful requests, but creates a new attempt
         # when the latest identical request is FAILED or STALE.
         retry=True,
     )
     if not created:
-        if fix_commit.generated_commit_sha:
-            return (
-                "**This AI fix request was already committed**\n\n"
-                f"Commit: [{fix_commit.generated_commit_sha[:7]}]"
-                f"({fix_commit.generated_commit_url})"
-            )
-        return f"**This AI fix request is already being tracked:** `{fix_commit.status}`"
+        return _existing_request_message(fix_commit)
     tracking.transition(db, fix_commit, FixCommitStatus.GENERATING)
 
     try:
@@ -389,6 +402,41 @@ def _response_target_from_payload(payload: dict, event: str | None) -> dict:
         }
 
     return {"kind": "pr_comment"}
+
+
+def _request_key_from_payload(payload: dict, event: str | None) -> str | None:
+    repository = (payload.get("repository") or {}).get("full_name")
+    comment_id = (payload.get("comment") or {}).get("id")
+    if not repository or comment_id is None:
+        return None
+    return f"github:{repository}:{event or 'comment'}:{comment_id}"
+
+
+def _existing_request_message(fix_commit: FixCommit) -> str:
+    if fix_commit.generated_commit_sha:
+        return (
+            "**This AI fix request was already committed**\n\n"
+            f"Commit: [{fix_commit.generated_commit_sha[:7]}]"
+            f"({fix_commit.generated_commit_url})"
+        )
+    return f"**This AI fix request is already being tracked:** `{fix_commit.status}`"
+
+
+def _ai_failure_message(exc: AIReviewServiceError) -> str:
+    unchanged = "No code or branch was changed by this attempt."
+    if exc.error_type == "timeout":
+        return f"**AI Fix timed out**\n\n{exc} {unchanged}"
+    if exc.error_type == "rate_limit":
+        return f"**AI Fix rate limited**\n\n{exc} {unchanged}"
+    if exc.error_type == "quota":
+        return f"**AI Fix quota exhausted**\n\n{exc} {unchanged}"
+    if exc.error_type == "capacity":
+        return f"**AI Fix provider unavailable**\n\n{exc} {unchanged}"
+    return (
+        "**AI Fix failed**\n\n"
+        "An internal error prevented the AI request from completing. "
+        f"{unchanged} Check the worker logs before retrying."
+    )
 
 
 def _post_command_response(

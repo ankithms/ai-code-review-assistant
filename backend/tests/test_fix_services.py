@@ -332,6 +332,7 @@ class FixRouteSafetyTests(unittest.TestCase):
         provider_error = AIReviewServiceError(
             "AI fix generation service is temporarily unavailable.",
             retryable=True,
+            error_type="capacity",
         )
 
         with (
@@ -958,6 +959,7 @@ class GithubNativeFixServiceTests(unittest.TestCase):
         provider_error = AIReviewServiceError(
             "AI fix generation service is temporarily unavailable.",
             retryable=True,
+            error_type="capacity",
         )
         db = SimpleNamespace(rollback=Mock())
 
@@ -982,11 +984,24 @@ class GithubNativeFixServiceTests(unittest.TestCase):
 
         self.assertTrue(handled)
         response_body = post_response.call_args.kwargs["body"]
-        self.assertIn("AI Fix temporarily unavailable", response_body)
+        self.assertIn("AI Fix provider unavailable", response_body)
         self.assertIn("No code or branch was changed", response_body)
-        self.assertIn("run the `/ai-fix` command again later", response_body)
         db.rollback.assert_called_once_with()
         log_exception.assert_not_called()
+
+    def test_internal_ai_failure_is_not_reported_as_provider_busy(self):
+        error = AIReviewServiceError(
+            "AI fix generation failed because of an internal error.",
+            retryable=False,
+            error_type="internal",
+        )
+
+        message = github_native_fix_service._ai_failure_message(error)
+
+        self.assertIn("AI Fix failed", message)
+        self.assertIn("internal error", message)
+        self.assertNotIn("busy", message)
+        self.assertNotIn("provider unavailable", message)
 
     def test_parse_ai_fix_reply_command(self):
         command = github_native_fix_service._parse_fix_command({
@@ -1008,6 +1023,16 @@ class GithubNativeFixServiceTests(unittest.TestCase):
         self.assertEqual(command.target, "all")
         self.assertIsNone(command.issue_id)
 
+    def test_parse_ai_fix_open_command(self):
+        command = github_native_fix_service._parse_fix_command({
+            "comment": {
+                "body": "/ai-fix open",
+            }
+        })
+
+        self.assertEqual(command.target, "all")
+        self.assertIsNone(command.issue_id)
+
     def test_parse_ai_fix_issue_command(self):
         command = github_native_fix_service._parse_fix_command({
             "comment": {
@@ -1017,6 +1042,35 @@ class GithubNativeFixServiceTests(unittest.TestCase):
 
         self.assertEqual(command.target, "issue")
         self.assertEqual(command.issue_id, 123)
+
+    def test_parse_ai_fix_bare_issue_id_command(self):
+        command = github_native_fix_service._parse_fix_command({
+            "comment": {
+                "body": "/ai-fix 123",
+            }
+        })
+
+        self.assertEqual(command.target, "issue")
+        self.assertEqual(command.issue_id, 123)
+
+    def test_ai_provider_failure_messages_keep_categories_distinct(self):
+        cases = {
+            "timeout": "AI Fix timed out",
+            "rate_limit": "AI Fix rate limited",
+            "quota": "AI Fix quota exhausted",
+            "capacity": "AI Fix provider unavailable",
+        }
+
+        for error_type, heading in cases.items():
+            with self.subTest(error_type=error_type):
+                message = github_native_fix_service._ai_failure_message(
+                    AIReviewServiceError(
+                        f"classified {error_type} failure",
+                        retryable=error_type != "quota",
+                        error_type=error_type,
+                    )
+                )
+                self.assertIn(heading, message)
 
     def test_ignores_non_ai_fix_comment(self):
         self.assertIsNone(

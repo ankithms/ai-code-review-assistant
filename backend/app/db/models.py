@@ -429,6 +429,7 @@ class FixCommit(Base):
     resulting_head_sha = Column(String)
     source_branch = Column(String(255), nullable=False)
     idempotency_key = Column(String(64), nullable=True)
+    request_key = Column(String(255), unique=True, index=True)
     attempt = Column(Integer, nullable=False, default=1, server_default="1")
     validation_status = Column(String(30), nullable=False, default="PASSED")
     validation_summary = Column(Text)

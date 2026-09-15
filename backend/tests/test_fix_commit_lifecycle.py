@@ -57,7 +57,16 @@ def lifecycle_db():
         db.close()
 
 
-def _create(db, repository, pull_request, review, issues, head="head-1", retry=False):
+def _create(
+    db,
+    repository,
+    pull_request,
+    review,
+    issues,
+    head="head-1",
+    retry=False,
+    request_key=None,
+):
     return FixCommitTrackingService().create_or_get(
         db,
         repository_id=repository.id,
@@ -67,6 +76,7 @@ def _create(db, repository, pull_request, review, issues, head="head-1", retry=F
         source_head_sha=head,
         source_branch="feature",
         retry=retry,
+        request_key=request_key,
     )
 
 
@@ -161,6 +171,43 @@ def test_explicit_retry_creates_a_new_attempt_after_failure(lifecycle_db):
     assert created is False and without_retry.id == first.id
     assert retry_created is True
     assert retried.attempt == 2
+
+
+def test_duplicate_delivery_does_not_retry_failed_request_but_new_comment_does(lifecycle_db):
+    db, repository, pull_request, review, issues = lifecycle_db
+    tracking = FixCommitTrackingService()
+    first, _ = _create(
+        db,
+        repository,
+        pull_request,
+        review,
+        issues,
+        request_key="github:owner/repo:issue_comment:100",
+    )
+    tracking.mark_failed(db, first, "model generation failed")
+
+    duplicate, duplicate_created = _create(
+        db,
+        repository,
+        pull_request,
+        review,
+        issues,
+        retry=True,
+        request_key="github:owner/repo:issue_comment:100",
+    )
+    explicit_retry, retry_created = _create(
+        db,
+        repository,
+        pull_request,
+        review,
+        issues,
+        retry=True,
+        request_key="github:owner/repo:issue_comment:101",
+    )
+
+    assert duplicate_created is False and duplicate.id == first.id
+    assert retry_created is True
+    assert explicit_retry.attempt == 2
 
 
 def test_partial_validation_records_committed_and_skipped_issue_counts(lifecycle_db):

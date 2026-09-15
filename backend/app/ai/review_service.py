@@ -14,10 +14,12 @@ class AIReviewServiceError(RuntimeError):
         message: str,
         retryable: bool = True,
         retry_after_seconds: int | None = None,
+        error_type: str = "internal",
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.retry_after_seconds = retry_after_seconds
+        self.error_type = error_type
 
 
 def review_service_prompt() -> str:
@@ -255,6 +257,7 @@ def ai_service_error(
         return AIReviewServiceError(
             f"{operation} service timed out. {retry_message}",
             retryable=True,
+            error_type="timeout",
         )
 
     if _is_quota_exhausted_error(error_text):
@@ -266,6 +269,7 @@ def ai_service_error(
             ),
             retryable=False,
             retry_after_seconds=retry_after,
+            error_type="quota",
         )
 
     if _is_rate_limit_error(error_text):
@@ -279,6 +283,7 @@ def ai_service_error(
             f"{operation} service was rate limited.{retry_after_message}",
             retryable=True,
             retry_after_seconds=retry_after,
+            error_type="rate_limit",
         )
 
     if _is_temporary_availability_error(error_text):
@@ -288,9 +293,17 @@ def ai_service_error(
                 f"capacity. {retry_message}"
             ),
             retryable=True,
+            error_type="capacity",
         )
 
-    return AIReviewServiceError(f"{operation} service failed", retryable=True)
+    # Unknown exceptions include programming/configuration errors (for example,
+    # calling the synchronous model bridge from an active asyncio loop). Do not
+    # describe or retry those as provider-capacity incidents.
+    return AIReviewServiceError(
+        f"{operation} failed because of an internal error before a provider response was classified.",
+        retryable=False,
+        error_type="internal",
+    )
 
 
 def _is_quota_exhausted_error(error_text: str) -> bool:
