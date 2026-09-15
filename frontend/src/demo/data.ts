@@ -70,6 +70,43 @@ export const demoReviews = [
   { id: 3, pr_id: 103, pr_number: 103, pr_title: "Add pagination to the item list", review_mode: "Full", created_at: "2026-09-02T11:05:00Z", summary: "Pagination: no actionable issues found in the supplied changes.", issues: [], fix_commits: [] },
 ];
 
+export const demoReviewOverviews = [
+  {
+    pr_id: 104, repository: "demo/shop-api", pr_number: 104,
+    title: "Update checkout validation and order lookup", author: "demo-developer",
+    latest_reviewed_commit_sha: "a922ce10", latest_review_id: 4,
+    latest_review_time: "2026-09-03T14:18:00Z", open_findings: 2,
+    resolved_findings: 0, ignored_findings: 0, highest_open_severity: "high",
+    latest_run: { review_id: 4, job_id: 4, commit_sha: "a922ce10", run_type: "Initial review", status: "COMPLETED", result: "2 new findings", finding_count: 2, resolved_count: 0, created_at: "2026-09-03T14:18:00Z", completed_at: "2026-09-03T14:19:00Z" },
+    review_history: [
+      { review_id: 4, job_id: 4, commit_sha: "a922ce10", run_type: "Initial review", status: "COMPLETED", result: "2 new findings", finding_count: 2, resolved_count: 0, created_at: "2026-09-03T14:18:00Z", completed_at: "2026-09-03T14:19:00Z" },
+    ],
+  },
+  {
+    pr_id: 103, repository: "demo/shop-api", pr_number: 103,
+    title: "Add pagination to the item list", author: "demo-developer",
+    latest_reviewed_commit_sha: "61fe3a9", latest_review_id: 3,
+    latest_review_time: "2026-09-02T11:05:00Z", open_findings: 0,
+    resolved_findings: 0, ignored_findings: 0, highest_open_severity: null,
+    latest_run: { review_id: 3, job_id: 3, commit_sha: "61fe3a9", run_type: "Initial review", status: "COMPLETED", result: "No findings", finding_count: 0, resolved_count: 0, created_at: "2026-09-02T11:05:00Z", completed_at: "2026-09-02T11:06:00Z" },
+    review_history: [
+      { review_id: 3, job_id: 3, commit_sha: "61fe3a9", run_type: "Initial review", status: "COMPLETED", result: "No findings", finding_count: 0, resolved_count: 0, created_at: "2026-09-02T11:05:00Z", completed_at: "2026-09-02T11:06:00Z" },
+    ],
+  },
+  {
+    pr_id: 101, repository: "demo/shop-api", pr_number: 101,
+    title: "Calculate average cart price", author: "demo-developer",
+    latest_reviewed_commit_sha: "c4e18f2a", latest_review_id: 2,
+    latest_review_time: "2026-09-01T10:00:00Z", open_findings: 0,
+    resolved_findings: 1, ignored_findings: 0, highest_open_severity: null,
+    latest_run: { review_id: 2, job_id: 2, commit_sha: "c4e18f2a", run_type: "Fix verification", status: "COMPLETED", result: "1 resolved", finding_count: 0, resolved_count: 1, created_at: "2026-09-01T10:00:00Z", completed_at: "2026-09-01T10:01:00Z" },
+    review_history: [
+      { review_id: 2, job_id: 2, commit_sha: "c4e18f2a", run_type: "Fix verification", status: "COMPLETED", result: "1 resolved", finding_count: 0, resolved_count: 1, created_at: "2026-09-01T10:00:00Z", completed_at: "2026-09-01T10:01:00Z" },
+      { review_id: 1, job_id: 1, commit_sha: "7bd921a4", run_type: "Initial review", status: "COMPLETED", result: "1 new finding", finding_count: 1, resolved_count: 0, created_at: "2026-08-30T09:42:00Z", completed_at: "2026-08-30T09:43:00Z" },
+    ],
+  },
+];
+
 export const demoDiffs: Record<number, string> = {
   4: "app/inventory.py\n@@ -21,3 +21,3 @@ def reserve_stock(quantity, available_stock):\n-    if quantity > available_stock:\n+    if quantity >= available_stock:\n         raise ValueError(\"Insufficient stock\")\n     return available_stock - quantity\n\napp/orders.py\n@@ -31,4 +31,4 @@ def get_order(order_id, current_user, db):\n-    order = db.query(Order).filter_by(id=order_id, user_id=current_user.id).first()\n+    order = db.query(Order).filter_by(id=order_id).first()\n     if order is None:\n         raise HTTPException(status_code=404, detail=\"Order not found\")\n     return order",
 
@@ -87,6 +124,7 @@ const pullRequestCount = new Set(demoReviews.map(review => review.pr_id)).size;
 export const demoResponses: Record<string, unknown> = {
   "/repositories": [{ id: 1, full_name: "demo/shop-api" }],
   "/repositories/1/reviews": demoReviews,
+  "/repositories/1/reviews/overview": demoReviewOverviews,
   ...Object.fromEntries(demoReviews.map(review => [`/repositories/1/reviews/${review.id}`, review])),
   "/repositories/1/pull-requests": [
     { id: 101, github_pr_id: 101, pull_request_number: 101, title: "Calculate average cart price", repository: "demo/shop-api", author: "demo-developer", review_id: 1 },

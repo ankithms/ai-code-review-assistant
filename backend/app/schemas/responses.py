@@ -142,6 +142,36 @@ class ReviewListResponse(BaseModel):
     }
 
 
+class ReviewRunOverviewResponse(BaseModel):
+    review_id: int | None = None
+    job_id: int | None = None
+    commit_sha: str
+    run_type: str
+    status: str
+    result: str
+    finding_count: int = 0
+    resolved_count: int = 0
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class PullRequestReviewOverviewResponse(BaseModel):
+    pr_id: int
+    repository: str
+    pr_number: int | None = None
+    title: str
+    author: str
+    latest_reviewed_commit_sha: str | None = None
+    latest_review_id: int | None = None
+    latest_review_time: datetime | None = None
+    open_findings: int = 0
+    resolved_findings: int = 0
+    ignored_findings: int = 0
+    highest_open_severity: str | None = None
+    latest_run: ReviewRunOverviewResponse | None = None
+    review_history: list[ReviewRunOverviewResponse] = Field(default_factory=list)
+
+
 class IssueStatusUpdateRequest(BaseModel):
     status: IssueStatus
 

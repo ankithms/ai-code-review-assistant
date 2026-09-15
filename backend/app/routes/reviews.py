@@ -15,11 +15,13 @@ from app.repositories.review_repository import (
     update_issue_status,
 )
 from app.services.github_thread_sync_service import sync_issue_statuses_from_github
+from app.services.review_overview_service import get_pull_request_review_overviews
 from app.schemas.responses import (
     IssueResponse,
     IssueStatusUpdateRequest,
     ReviewDetailResponse,
     ReviewListResponse,
+    PullRequestReviewOverviewResponse,
 )
 
 router = APIRouter(
@@ -39,6 +41,17 @@ def get_reviews(
     db: Session = Depends(get_db)
 ):
     return get_reviews_for_repository(db, repository_id)
+
+
+@router.get(
+    "/overview",
+    response_model=list[PullRequestReviewOverviewResponse],
+)
+def get_review_overviews(
+    repository_id: int,
+    db: Session = Depends(get_db),
+):
+    return get_pull_request_review_overviews(db, repository_id)
 
 
 @router.get(
