@@ -895,11 +895,13 @@ class GithubNativeFixServiceTests(unittest.TestCase):
             "head": {"sha": "head-sha", "ref": "feature"},
         }
         existing = SimpleNamespace(
+            id=50,
             status="GENERATING",
             generated_commit_sha=None,
         )
         tracking = Mock()
         tracking.create_or_get.return_value = (existing, False)
+        selection = SimpleNamespace(selected=[issue])
 
         with (
             patch.object(
@@ -914,8 +916,8 @@ class GithubNativeFixServiceTests(unittest.TestCase):
             ),
             patch.object(
                 github_native_fix_service,
-                "_select_command_issues",
-                return_value=[issue],
+                "get_current_actionable_issues_for_pull_request",
+                return_value=selection,
             ),
             patch.object(github_native_fix_service, "_validate_issues_eligible_for_fix"),
             patch.object(

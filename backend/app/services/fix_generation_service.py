@@ -194,6 +194,31 @@ class FixGenerationService:
         db.commit()
         return issues
 
+    def regenerate_fixes(
+        self,
+        db: Session,
+        issues: list[Issue],
+        repository: str,
+        target_ref: str,
+        target_head_sha: str,
+        access_token: str,
+        pull_request: dict | None = None,
+    ) -> list[Issue]:
+        """Discard persisted edits and generate replacements from the current PR head."""
+        for issue in issues:
+            self._clear_fix(issue)
+            db.add(issue)
+        db.flush()
+        return self.generate_fixes(
+            db=db,
+            issues=issues,
+            repository=repository,
+            target_ref=target_ref,
+            target_head_sha=target_head_sha,
+            access_token=access_token,
+            pull_request=pull_request,
+        )
+
     def _invoke_fix_model(self, context: FixContext) -> GeneratedFix:
         try:
             return invoke_with_deadline(

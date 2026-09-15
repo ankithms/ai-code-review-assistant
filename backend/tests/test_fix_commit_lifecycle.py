@@ -142,11 +142,14 @@ def test_review_detail_serializes_fix_commit_issue_links(lifecycle_db):
 
 def test_idempotency_reuses_same_request_and_changes_with_head_or_selection(lifecycle_db):
     db, repository, pull_request, review, issues = lifecycle_db
+    tracking = FixCommitTrackingService()
     first, _ = _create(db, repository, pull_request, review, issues)
     duplicate, created = _create(db, repository, pull_request, review, list(reversed(issues)))
+    tracking.mark_failed(db, first, "test attempt complete")
     new_head, new_head_created = _create(
         db, repository, pull_request, review, issues, head="head-2"
     )
+    tracking.mark_failed(db, new_head, "test attempt complete")
     new_selection, new_selection_created = _create(
         db, repository, pull_request, review, issues[:1]
     )

@@ -16,7 +16,12 @@ from app.routes.fixes import (
     _validate_issues_eligible_for_fix,
 )
 from app.schemas.output import FixCommitStatus
+from app.services.actionable_issue_service import (
+    ActionableIssueSelection,
+    get_current_actionable_issues_for_pull_request,
+)
 from app.services.fix_commit_tracking_service import (
+    FindingAlreadyClaimedError,
     FixCommitAlreadyClaimedError,
     FixCommitTrackingService,
 )
@@ -167,16 +172,28 @@ def _run_fix_command(
     if review is None:
         raise ValueError("No AI review was found for this pull request.")
 
-    issues = _select_command_issues(
-        db=db,
-        review=review,
-        command=command,
-        payload=payload,
-    )
+    selection = None
+    if command.target == "all":
+        selection = get_current_actionable_issues_for_pull_request(
+            db,
+            repository_id=pull_request_record.repository_id,
+            pull_request_number=pull_request_number,
+        )
+        issues = selection.selected
+    else:
+        issues = _select_command_issues(
+            db=db,
+            review=review,
+            command=command,
+            payload=payload,
+        )
     if not issues:
+        if selection is not None:
+            return _selection_message(selection, request_key=request_key)
         raise ValueError("No eligible AI findings were found for this command.")
 
-    _validate_issues_eligible_for_fix(issues)
+    if command.target != "all":
+        _validate_issues_eligible_for_fix(issues)
     pull_request = _github_pull_request(db, review, access_token)
     GitCommitService().validate_direct_commit_target(
         repository=repository,
@@ -186,27 +203,42 @@ def _run_fix_command(
     target_head_sha = pull_request["head"]["sha"]
     commenter = ((payload.get("comment") or {}).get("user") or {}).get("login")
     tracking = FixCommitTrackingService()
-    fix_commit, created = tracking.create_or_get(
-        db,
-        repository_id=pull_request_record.repository_id,
-        pull_request_id=pull_request_record.id,
-        review_id=review.id,
-        issues=issues,
-        source_head_sha=target_head_sha,
-        source_branch=pull_request["head"]["ref"],
-        requested_by=commenter,
-        request_key=request_key,
-        # Posting a new command is an explicit user retry. The tracking service
-        # still deduplicates active/successful requests, but creates a new attempt
-        # when the latest identical request is FAILED or STALE.
-        retry=True,
-    )
+    for claim_attempt in range(2):
+        try:
+            fix_commit, created = tracking.create_or_get(
+                db,
+                repository_id=pull_request_record.repository_id,
+                pull_request_id=pull_request_record.id,
+                review_id=review.id,
+                issues=issues,
+                source_head_sha=target_head_sha,
+                source_branch=pull_request["head"]["ref"],
+                requested_by=commenter,
+                request_key=request_key,
+                # Posting a new command is an explicit user retry. The tracking service
+                # still deduplicates active/successful requests, but creates a new attempt
+                # when the latest identical request is FAILED or STALE.
+                retry=True,
+            )
+            break
+        except FindingAlreadyClaimedError:
+            db.rollback()
+            if command.target != "all":
+                return "**AI Fix already in progress**\n\nThis finding is already being processed."
+            selection = get_current_actionable_issues_for_pull_request(
+                db,
+                repository_id=pull_request_record.repository_id,
+                pull_request_number=pull_request_number,
+            )
+            issues = selection.selected
+            if not issues or claim_attempt == 1:
+                return _selection_message(selection, request_key=request_key)
     if not created:
         return _existing_request_message(fix_commit)
     tracking.transition(db, fix_commit, FixCommitStatus.GENERATING)
 
     try:
-        FixGenerationService().generate_fixes(
+        FixGenerationService().regenerate_fixes(
             db=db,
             issues=issues,
             repository=repository,
@@ -284,12 +316,21 @@ def _run_fix_command(
             result=result,
         )
 
-    return (
+    result_message = (
         "**AI fixes committed to this Pull Request**\n\n"
         f"Commit: [{result.commit_sha[:7]}]({result.commit_url})\n\n"
         f"Message: `{commit_message.splitlines()[0]}`\n\n"
         f"Included issues: {', '.join(f'#{issue.id}' for issue in included_issues)}"
     )
+    if selection is not None:
+        result_message += "\n\n" + _selection_message(
+            selection,
+            queued=len(issues),
+            request_key=request_key,
+            job_id=fix_commit.id,
+            heading=False,
+        )
+    return result_message
 
 
 def _select_command_issues(
@@ -417,9 +458,65 @@ def _existing_request_message(fix_commit: FixCommit) -> str:
         return (
             "**This AI fix request was already committed**\n\n"
             f"Commit: [{fix_commit.generated_commit_sha[:7]}]"
-            f"({fix_commit.generated_commit_url})"
+            f"({fix_commit.generated_commit_url})\n\n"
+            f"Request/job: `job {fix_commit.id}`"
         )
-    return f"**This AI fix request is already being tracked:** `{fix_commit.status}`"
+    return (
+        f"**This AI fix request is already being tracked:** `{fix_commit.status}`\n\n"
+        f"Request/job: `job {fix_commit.id}`"
+    )
+
+
+def _selection_message(
+    selection: ActionableIssueSelection,
+    *,
+    queued: int = 0,
+    request_key: str | None = None,
+    job_id: int | None = None,
+    heading: bool = True,
+) -> str:
+    lines = []
+    if heading:
+        lines.extend(["**AI Fix selection complete**", ""])
+    lines.extend(
+        [
+            f"Selected: {len(selection.selected)}",
+            f"Queued: {queued}",
+            f"Excluded: {len(selection.excluded)}",
+        ]
+    )
+    if selection.excluded:
+        lines.extend(["", "Excluded findings:"])
+        lines.extend(
+            f"- #{item.issue.id} (`{item.issue.file or 'unknown file'}`): {item.reason}"
+            for item in selection.excluded
+        )
+    if selection.manual_review:
+        lines.extend(
+            [
+                "",
+                "Manual review required: "
+                + ", ".join(f"#{item.issue.id}" for item in selection.manual_review),
+            ]
+        )
+
+    if queued == 0:
+        reasons = {item.reason for item in selection.excluded}
+        if selection.canonical_count == 0:
+            outcome = "No unresolved findings exist for this pull request."
+        elif reasons and all(reason in {"resolved", "conclusively resolved by verification", "explicitly ignored"} for reason in reasons):
+            outcome = "Only ignored or resolved findings remain."
+        elif reasons and all(reason == "already being processed" for reason in reasons):
+            outcome = "All actionable findings are already being processed."
+        elif any(reason.startswith("retry limit reached") for reason in reasons):
+            outcome = "The retry limit has been reached for the remaining findings."
+        else:
+            outcome = "Unresolved findings exist, but none are currently eligible."
+        lines.extend(["", outcome])
+
+    identifier = f"job {job_id}" if job_id is not None else (request_key or "unavailable")
+    lines.extend(["", f"Request/job: `{identifier}`"])
+    return "\n".join(lines)
 
 
 def _ai_failure_message(exc: AIReviewServiceError) -> str:

@@ -25,6 +25,14 @@ class FixCommitAlreadyClaimedError(RuntimeError):
     """Another request already advanced this tracking record to commit creation."""
 
 
+class FindingAlreadyClaimedError(RuntimeError):
+    """Another active request claimed at least one selected finding."""
+
+    def __init__(self, issue_ids: list[int]):
+        self.issue_ids = issue_ids
+        super().__init__(f"Findings already being processed: {issue_ids}")
+
+
 FINAL_STATUSES = {
     FixCommitStatus.RESOLVED.value,
     FixCommitStatus.PARTIALLY_RESOLVED.value,
@@ -110,8 +118,50 @@ class FixCommitTrackingService:
             .first()
         )
         if existing is not None and (existing.status not in RETRYABLE_STATUSES or not retry):
-            return existing, False
+            # Preserve API-level idempotency for callers without a delivery key.
+            # A different explicit command key must continue to the overlap check
+            # so it is reported as an active per-finding claim instead.
+            if request_key is None:
+                return existing, False
 
+        # Lock in a stable order so overlapping commands serialize on the same
+        # finding rows. The active-link check and new claim are committed as one
+        # transaction, preventing different request keys from duplicating work.
+        (
+            db.query(Issue.id)
+            .filter(Issue.id.in_(issue_ids))
+            .order_by(Issue.id.asc())
+            .with_for_update()
+            .all()
+        )
+        active_links = (
+            db.query(FixCommitIssue)
+            .join(FixCommit)
+            .filter(
+                FixCommitIssue.issue_id.in_(issue_ids),
+                FixCommitIssue.resolution_status.is_(None),
+                FixCommit.status.in_({
+                    FixCommitStatus.REQUESTED.value,
+                    FixCommitStatus.GENERATING.value,
+                    FixCommitStatus.VALIDATING.value,
+                    FixCommitStatus.COMMITTING.value,
+                    FixCommitStatus.COMMITTED.value,
+                    FixCommitStatus.REVIEW_PENDING.value,
+                }),
+                FixCommitIssue.status.notin_({
+                    FixCommitIssueStatus.SKIPPED.value,
+                    FixCommitIssueStatus.FAILED.value,
+                    FixCommitIssueStatus.FAILED_TO_VERIFY.value,
+                    FixCommitIssueStatus.STILL_OPEN.value,
+                    FixCommitIssueStatus.MOVED.value,
+                }),
+            )
+            .all()
+        )
+        if active_links:
+            raise FindingAlreadyClaimedError(
+                sorted({link.issue_id for link in active_links})
+            )
         attempt = (existing.attempt + 1) if existing is not None else 1
         record = FixCommit(
             repository_id=repository_id,
