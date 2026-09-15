@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -122,6 +123,87 @@ def test_issue_disappears_and_deleted_file_are_resolved(verification_db):
     assert record.issue_links[0].status == FixCommitIssueStatus.RESOLVED.value
     assert original.status == IssueStatus.RESOLVED.value
     assert record.resolved_issue_count == 1
+
+
+def test_verified_resolution_resolves_associated_github_thread(verification_db):
+    db, repository, pull_request, review = verification_db
+    original = _issue(review)
+    original.github_review_thread_id = "PRRT_verified"
+    db.add(original)
+    db.commit()
+    tracking, record = _committed_record(db, repository, pull_request, review, [original])
+    follow_up = Review(
+        pull_request=pull_request,
+        summary="follow-up",
+        commit_sha=record.generated_commit_sha,
+    )
+    db.add(follow_up)
+    db.commit()
+
+    with patch(
+        "app.services.fix_commit_tracking_service.resolve_review_thread"
+    ) as resolve_thread:
+        tracking.complete_review(
+            db,
+            record=record,
+            review=follow_up,
+            new_issues=[],
+            github_access_token="token",
+        )
+
+    resolve_thread.assert_called_once_with("PRRT_verified", "token")
+    assert original.status == IssueStatus.RESOLVED.value
+    assert record.status == FixCommitStatus.RESOLVED.value
+
+
+def test_github_thread_resolution_failure_does_not_fail_verification(
+    verification_db, caplog
+):
+    db, repository, pull_request, review = verification_db
+    original = _issue(review)
+    original.github_review_thread_id = "PRRT_unavailable"
+    db.add(original)
+    db.commit()
+    tracking, record = _committed_record(db, repository, pull_request, review, [original])
+    follow_up = Review(
+        pull_request=pull_request,
+        summary="follow-up",
+        commit_sha=record.generated_commit_sha,
+    )
+    db.add(follow_up)
+    db.commit()
+
+    with patch(
+        "app.services.fix_commit_tracking_service.resolve_review_thread",
+        side_effect=RuntimeError("permission denied"),
+    ):
+        completed = tracking.complete_review(
+            db,
+            record=record,
+            review=follow_up,
+            new_issues=[],
+            github_access_token="token",
+        )
+
+    db.refresh(original)
+    assert completed.status == FixCommitStatus.RESOLVED.value
+    assert original.status == IssueStatus.RESOLVED.value
+    assert "preserving resolved dashboard status" in caplog.text
+
+
+def test_follow_up_verification_preserves_manually_ignored_issue(verification_db):
+    db, repository, pull_request, review = verification_db
+    original = _issue(review)
+    db.add(original)
+    db.commit()
+    tracking, record = _committed_record(db, repository, pull_request, review, [original])
+    original.status = IssueStatus.IGNORED.value
+    db.commit()
+
+    _complete(db, tracking, record, pull_request, [])
+
+    assert record.issue_links[0].status == FixCommitIssueStatus.RESOLVED.value
+    assert original.status == IssueStatus.IGNORED.value
 
 
 def test_equivalent_issue_on_same_line_is_still_open(verification_db):

@@ -165,7 +165,7 @@ def _process_pull_request_review(db, job) -> None:
             current_head_sha=(pull_request.get("head") or {}).get("sha"),
             access_token=token,
         )
-        _complete_fix_commit_review(db, job, existing_review, None, files)
+        _complete_fix_commit_review(db, job, existing_review, None, files, token)
         return
 
     pull_request = get_pull_request(
@@ -211,7 +211,7 @@ def _process_pull_request_review(db, job) -> None:
             ),
             commit_sha=job.commit_sha,
         )
-        _complete_fix_commit_review(db, job, saved_review, [], files)
+        _complete_fix_commit_review(db, job, saved_review, [], files, token)
         return
 
     logger.info("Calling AI review service for job %s", job.id)
@@ -304,7 +304,7 @@ def _process_pull_request_review(db, job) -> None:
             review_data=_review_with_issues(ai_review, []),
             commit_sha=job.commit_sha,
         )
-        _complete_fix_commit_review(db, job, saved_review, ai_review.issues, files)
+        _complete_fix_commit_review(db, job, saved_review, ai_review.issues, files, token)
         return
 
     _post_github_comments(
@@ -324,7 +324,7 @@ def _process_pull_request_review(db, job) -> None:
         review_data=_review_with_issues(ai_review, issues_to_post),
         commit_sha=job.commit_sha,
     )
-    _complete_fix_commit_review(db, job, saved_review, ai_review.issues, files)
+    _complete_fix_commit_review(db, job, saved_review, ai_review.issues, files, token)
 
 
 def _build_diff(files: list[dict]) -> str:
@@ -476,7 +476,14 @@ def _reconcile_direct_fix_commit_issues(
     return resolved_count
 
 
-def _complete_fix_commit_review(db, job, saved_review: Review, new_issues, files=None) -> None:
+def _complete_fix_commit_review(
+    db,
+    job,
+    saved_review: Review,
+    new_issues,
+    files=None,
+    github_access_token: str | None = None,
+) -> None:
     fix_commit = None
     fix_commit_id = getattr(job, "fix_commit_id", None)
     if fix_commit_id is not None:
@@ -510,6 +517,7 @@ def _complete_fix_commit_review(db, job, saved_review: Review, new_issues, files
         new_issues=new_issues,
         issues_match=_issues_match,
         rename_map=rename_map_from_files(files or []),
+        github_access_token=github_access_token,
     )
 
 

@@ -7,11 +7,27 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.db.models import Base, FixPullRequest, Issue, PullRequest, Repository, Review, ReviewJob
+from app.db.models import (
+    Base,
+    FixCommit,
+    FixCommitIssue,
+    FixPullRequest,
+    Issue,
+    PullRequest,
+    Repository,
+    Review,
+    ReviewJob,
+)
 from app.repositories.analytics_repository import get_analytics
 from app.repositories.review_repository import reconcile_merged_fix_issue_statuses, update_issue_status
 from app.routes.analytics import sync_analytics
-from app.schemas.output import FixPullRequestStatus, IssueFixStatus, IssueStatus
+from app.schemas.output import (
+    FixCommitIssueStatus,
+    FixCommitStatus,
+    FixPullRequestStatus,
+    IssueFixStatus,
+    IssueStatus,
+)
 from app.services.github_thread_sync_service import sync_issue_statuses_from_github
 
 
@@ -23,6 +39,58 @@ class IssueStatusLifecycleTests(unittest.TestCase):
 
     def tearDown(self):
         self.session.close()
+
+    def _github_issue_with_verification(self, resolution_status, suffix="verified"):
+        repository = Repository(full_name=f"owner/repo-{suffix}")
+        pull_request = PullRequest(
+            repository_ref=repository,
+            github_pr_id=None,
+            pull_request_number=1,
+            title="PR",
+            repository=repository.full_name,
+            author="user",
+        )
+        review = Review(
+            pull_request=pull_request,
+            summary="Summary",
+            commit_sha=f"abc-{suffix}",
+        )
+        issue = Issue(
+            review=review,
+            severity="high",
+            category="bug",
+            file="src/app.py",
+            comment="Issue",
+            github_review_thread_id=f"thread-{suffix}",
+            status=IssueStatus.RESOLVED.value
+            if resolution_status == FixCommitIssueStatus.RESOLVED.value
+            else IssueStatus.OPEN.value,
+            fix_status=IssueFixStatus.FIX_COMMITTED.value,
+        )
+        self.session.add_all([repository, pull_request, review, issue])
+        self.session.flush()
+        fix_commit = FixCommit(
+            repository_id=repository.id,
+            pull_request_id=pull_request.id,
+            review_id=review.id,
+            source_head_sha=f"abc-{suffix}",
+            source_branch="feature",
+            generated_commit_sha=f"fix-{resolution_status}-{suffix}",
+            status=FixCommitStatus.REVIEWED.value,
+        )
+        self.session.add(fix_commit)
+        self.session.flush()
+        self.session.add(
+            FixCommitIssue(
+                fix_commit_id=fix_commit.id,
+                issue_id=issue.id,
+                status=resolution_status,
+                resolution_status=resolution_status,
+                committed=True,
+            )
+        )
+        self.session.commit()
+        return repository, pull_request, issue
 
     def test_update_issue_status_rejects_invalid_status_value(self):
         issue = Issue(status=IssueStatus.OPEN.value)
@@ -160,6 +228,24 @@ class IssueStatusLifecycleTests(unittest.TestCase):
         self.assertIsNotNone(issue.resolved_at)
         self.assertEqual(issue.resolved_by, "octocat")
 
+        with patch(
+            "app.services.github_thread_sync_service._fetch_review_thread_states",
+            return_value={
+                "thread-1": {
+                    "is_resolved": False,
+                    "resolved_by": None,
+                }
+            },
+        ):
+            sync_issue_statuses_from_github(
+                self.session, repository.id, repository.full_name, "token"
+            )
+
+        self.session.refresh(issue)
+        self.assertEqual(issue.status, IssueStatus.OPEN.value)
+        self.assertIsNone(issue.resolved_at)
+        self.assertIsNone(issue.resolved_by)
+
     def test_sync_does_not_reopen_issues_resolved_by_merged_fix_pr(self):
         repository = Repository(full_name="owner/repo")
         self.session.add(repository)
@@ -210,6 +296,74 @@ class IssueStatusLifecycleTests(unittest.TestCase):
         self.assertEqual(issue.status, IssueStatus.RESOLVED.value)
         self.assertEqual(issue.resolved_at.replace(tzinfo=UTC), resolved_at)
         self.assertEqual(issue.fix_status, IssueFixStatus.FIX_MERGED.value)
+
+    def test_verified_ai_fix_stays_resolved_when_github_thread_is_open(self):
+        repository, pull_request, issue = self._github_issue_with_verification(
+            FixCommitIssueStatus.RESOLVED.value
+        )
+
+        with patch(
+            "app.services.github_thread_sync_service._fetch_review_thread_states",
+            return_value={
+                "thread-verified": {"is_resolved": False, "resolved_by": None}
+            },
+        ):
+            first_count = sync_issue_statuses_from_github(
+                self.session,
+                repository.id,
+                repository.full_name,
+                "token",
+                pull_request_id=pull_request.id,
+            )
+            second_count = sync_issue_statuses_from_github(
+                self.session,
+                repository.id,
+                repository.full_name,
+                "token",
+                pull_request_id=pull_request.id,
+            )
+
+        self.session.refresh(issue)
+        self.assertEqual(first_count, 0)
+        self.assertEqual(second_count, 0)
+        self.assertEqual(issue.status, IssueStatus.RESOLVED.value)
+
+    def test_nonresolved_ai_verification_outcomes_remain_open_with_open_threads(self):
+        outcomes = (
+            FixCommitIssueStatus.STILL_OPEN.value,
+            FixCommitIssueStatus.MOVED.value,
+            FixCommitIssueStatus.FAILED_TO_VERIFY.value,
+        )
+        for outcome in outcomes:
+            with self.subTest(outcome=outcome):
+                repository, pull_request, issue = self._github_issue_with_verification(
+                    outcome, outcome.lower()
+                )
+                # Simulate a stale dashboard value and prove these outcomes are
+                # not swept into the verified-resolved protection rule.
+                issue.status = IssueStatus.RESOLVED.value
+                issue.resolved_at = datetime.now(UTC)
+                self.session.commit()
+                with patch(
+                    "app.services.github_thread_sync_service._fetch_review_thread_states",
+                    return_value={
+                        f"thread-{outcome.lower()}": {
+                            "is_resolved": False,
+                            "resolved_by": None,
+                        }
+                    },
+                ):
+                    synced_count = sync_issue_statuses_from_github(
+                        self.session,
+                        repository.id,
+                        repository.full_name,
+                        "token",
+                        pull_request_id=pull_request.id,
+                    )
+
+                self.session.refresh(issue)
+                self.assertEqual(synced_count, 1)
+                self.assertEqual(issue.status, IssueStatus.OPEN.value)
 
     def test_sync_ignores_pull_requests_without_a_number(self):
         repository = Repository(full_name="owner/repo")

@@ -1,4 +1,5 @@
 import base64
+import json
 from urllib.parse import quote
 
 import requests
@@ -22,6 +23,45 @@ def _split_repository(repository):
         return None, None
 
     return parts[0], parts[1]
+
+
+@monitor_github("resolve_review_thread")
+def resolve_review_thread(thread_id, access_token):
+    """Resolve a pull-request review thread by its GraphQL node ID."""
+    response = requests.post(
+        f"{GITHUB_API_BASE_URL}/graphql",
+        headers={
+            **_headers(access_token),
+            "Content-Type": "application/json",
+        },
+        json={
+            "query": """
+            mutation($threadId: ID!) {
+              resolveReviewThread(input: {threadId: $threadId}) {
+                thread {
+                  id
+                  isResolved
+                }
+              }
+            }
+            """,
+            "variables": {"threadId": thread_id},
+        },
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("errors"):
+        raise RuntimeError(
+            f"GitHub resolveReviewThread returned errors: {json.dumps(payload['errors'])}"
+        )
+
+    thread = (
+        ((payload.get("data") or {}).get("resolveReviewThread") or {}).get("thread")
+    )
+    if not isinstance(thread, dict) or not thread.get("isResolved"):
+        raise RuntimeError("GitHub resolveReviewThread did not return a resolved thread")
+    return thread
 
 
 @monitor_github("get_pull_request")

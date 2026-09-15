@@ -96,6 +96,27 @@ SOURCE_SNIPPET_RETENTION_DAYS=30
 REVIEW_DATA_RETENTION_DAYS=365
 ```
 
+`GITHUB_ACCESS_TOKEN` must be able to write pull requests so verified AI fixes
+can resolve their GitHub review threads through the GraphQL
+`resolveReviewThread` mutation. For a fine-grained personal access token or a
+GitHub App installation token, grant repository **Pull requests: Read and
+write** permission. A classic personal access token needs the `repo` scope for
+private repositories (or `public_repo` for public-only repositories). If this
+permission is missing, fix verification still completes and the dashboard
+remains resolved, but the GitHub thread cannot be updated.
+
+Issue status follows this source-of-truth policy:
+
+- `IGNORED` is an explicit dashboard decision and is never overwritten.
+- A direct AI fix that a follow-up code review verifies as `RESOLVED` remains
+  resolved in the dashboard, even while GitHub still reports its thread open.
+- GitHub thread state controls findings without that conclusive successful
+  verification, including manual thread resolution and reopening. Direct fixes
+  classified `STILL_OPEN`, `MOVED`, or `FAILED_TO_VERIFY` are therefore not
+  broadly exempted from synchronization.
+- Issues from merged legacy fix pull requests remain resolved independently of
+  their original review thread state.
+
 Start from the checked-in template and replace all placeholder credentials:
 
 ```bash

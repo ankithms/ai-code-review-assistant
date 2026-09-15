@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import FixCommit, FixCommitIssue, Issue, IssueTimelineEvent, Review
+from app.github.github_service import resolve_review_thread
 from app.schemas.output import (
     FixCommitIssueStatus,
     FixCommitStatus,
@@ -466,6 +467,7 @@ class FixCommitTrackingService:
         new_issues,
         issues_match=None,
         rename_map: dict[str, str] | None = None,
+        github_access_token: str | None = None,
     ) -> FixCommit:
         now = datetime.now(UTC)
         review.fix_commit_id = record.id
@@ -530,26 +532,31 @@ class FixCommitTrackingService:
                 details=f"review {review.id}",
             )
 
+            preserve_ignored = issue.status == IssueStatus.IGNORED.value
             if evidence is None or evidence.confidence == "NONE":
                 resolution = FixCommitIssueStatus.RESOLVED
-                issue.status = IssueStatus.RESOLVED.value
-                issue.resolved_at = issue.resolved_at or now
-                issue.resolved_by = f"AI Fix Commit {record.generated_commit_sha[:7]}"
+                if not preserve_ignored:
+                    issue.status = IssueStatus.RESOLVED.value
+                    issue.resolved_at = issue.resolved_at or now
+                    issue.resolved_by = f"AI Fix Commit {record.generated_commit_sha[:7]}"
             elif evidence.confidence == "LOW":
                 resolution = FixCommitIssueStatus.FAILED_TO_VERIFY
-                issue.status = IssueStatus.OPEN.value
-                issue.resolved_at = None
-                issue.resolved_by = None
+                if not preserve_ignored:
+                    issue.status = IssueStatus.OPEN.value
+                    issue.resolved_at = None
+                    issue.resolved_by = None
             elif evidence.moved:
                 resolution = FixCommitIssueStatus.MOVED
-                issue.status = IssueStatus.OPEN.value
-                issue.resolved_at = None
-                issue.resolved_by = None
+                if not preserve_ignored:
+                    issue.status = IssueStatus.OPEN.value
+                    issue.resolved_at = None
+                    issue.resolved_by = None
             else:
                 resolution = FixCommitIssueStatus.STILL_OPEN
-                issue.status = IssueStatus.OPEN.value
-                issue.resolved_at = None
-                issue.resolved_by = None
+                if not preserve_ignored:
+                    issue.status = IssueStatus.OPEN.value
+                    issue.resolved_at = None
+                    issue.resolved_by = None
 
             persisted_current = self._find_persisted_current_issue(
                 matcher,
@@ -614,7 +621,35 @@ class FixCommitTrackingService:
         db.add(record)
         db.commit()
         db.refresh(record)
+        self._resolve_verified_github_threads(record, github_access_token)
         return record
+
+    @staticmethod
+    def _resolve_verified_github_threads(
+        record: FixCommit,
+        github_access_token: str | None,
+    ) -> None:
+        if not github_access_token:
+            return
+
+        for link in record.issue_links:
+            issue = link.issue
+            if (
+                link.resolution_status != FixCommitIssueStatus.RESOLVED.value
+                or issue is None
+                or not issue.github_review_thread_id
+            ):
+                continue
+            try:
+                resolve_review_thread(issue.github_review_thread_id, github_access_token)
+            except Exception:
+                # Verification is already committed and remains authoritative. A
+                # GitHub outage or permission problem must not undo that result.
+                logger.exception(
+                    "Failed to resolve GitHub review thread %s for verified issue %s; preserving resolved dashboard status",
+                    issue.github_review_thread_id,
+                    issue.id,
+                )
 
     def record_review_failure(self, db: Session, fix_commit_id: int, reason: str) -> None:
         record = db.query(FixCommit).filter(FixCommit.id == fix_commit_id).first()

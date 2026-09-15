@@ -59,3 +59,25 @@ def test_get_branch_exposes_protection_state():
 
     assert branch["protected"] is False
     assert get.call_args.args[0].endswith("/repos/owner/repo/branches/feature")
+
+
+def test_resolve_review_thread_uses_graphql_mutation():
+    response = FakeResponse(
+        {
+            "data": {
+                "resolveReviewThread": {
+                    "thread": {"id": "PRRT_kwDO-thread", "isResolved": True}
+                }
+            }
+        }
+    )
+
+    with patch.object(github_service.requests, "post", return_value=response) as post:
+        thread = github_service.resolve_review_thread("PRRT_kwDO-thread", "token")
+
+    assert thread["isResolved"] is True
+    assert post.call_args.args[0] == "https://api.github.com/graphql"
+    assert post.call_args.kwargs["json"]["variables"] == {
+        "threadId": "PRRT_kwDO-thread"
+    }
+    assert "resolveReviewThread" in post.call_args.kwargs["json"]["query"]

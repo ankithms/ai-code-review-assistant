@@ -6,8 +6,8 @@ from typing import Any
 import requests
 from sqlalchemy.orm import Session
 
-from app.db.models import Issue, PullRequest, Review
-from app.schemas.output import IssueFixStatus, IssueStatus
+from app.db.models import FixCommitIssue, Issue, PullRequest, Review
+from app.schemas.output import FixCommitIssueStatus, IssueFixStatus, IssueStatus
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,11 @@ def sync_issue_statuses_from_github(
             continue
 
         resolved = bool(state.get("is_resolved"))
+        # Follow-up code verification is authoritative when it conclusively
+        # proves a direct AI fix resolved the finding. GitHub continues to own
+        # unverified findings and can still resolve/reopen every other outcome.
+        if not resolved and _latest_ai_fix_verification(db, issue) == FixCommitIssueStatus.RESOLVED.value:
+            continue
         desired_status = IssueStatus.RESOLVED if resolved else IssueStatus.OPEN
         if issue.status == desired_status.value and (resolved or issue.resolved_at is None):
             continue
@@ -93,6 +98,17 @@ def sync_issue_statuses_from_github(
 
     db.commit()
     return synced_count
+
+
+def _latest_ai_fix_verification(db: Session, issue: Issue) -> str | None:
+    link = (
+        db.query(FixCommitIssue)
+        .filter(FixCommitIssue.issue_id == issue.id)
+        .filter(FixCommitIssue.resolution_status.isnot(None))
+        .order_by(FixCommitIssue.updated_at.desc(), FixCommitIssue.fix_commit_id.desc())
+        .first()
+    )
+    return link.resolution_status if link is not None else None
 
 
 def _fetch_review_thread_states(
