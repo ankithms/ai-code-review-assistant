@@ -64,7 +64,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
           <div className="auth-story">
             <span className="auth-brand"><span><Sparkles aria-hidden="true" size={19} /></span> Review Lab</span>
             <p className="eyebrow">AI code intelligence</p>
-            <h1>Ship confident code.<br /><em>Review at light speed.</em></h1>
+            <h1>
+              <span>Ship confident code.</span>
+              <em>Review at light speed.</em>
+            </h1>
             <p className="auth-story__lead">Turn pull requests into clear, prioritized findings—and move safely from issue to verified fix.</p>
 
             <div className="auth-features">

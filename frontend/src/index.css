@@ -3220,10 +3220,16 @@ button:active:not(:disabled),
 .auth-story h1 {
   margin: 8px 0 20px;
   color: #f3f6fc;
-  font-size: clamp(42px, 6vw, 68px);
+  font-size: clamp(38px, 4.4vw, 50px);
   font-weight: 780;
-  letter-spacing: -0.06em;
-  line-height: 0.99;
+  letter-spacing: -0.04em;
+  line-height: 1.12;
+}
+
+.auth-story h1 > span,
+.auth-story h1 em {
+  display: block;
+  white-space: nowrap;
 }
 
 .auth-story h1 em {
@@ -3868,7 +3874,13 @@ button:active:not(:disabled),
   }
 
   .auth-story h1 {
-    font-size: 40px;
+    font-size: 36px;
+    line-height: 1.14;
+  }
+
+  .auth-story h1 > span,
+  .auth-story h1 em {
+    white-space: normal;
   }
 
   .auth-story__lead {
