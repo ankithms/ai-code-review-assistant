@@ -24,6 +24,7 @@ import { api } from "../services/api";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusBadge from "../components/StatusBadge";
 import { useRepository } from "../context/useRepository";
+import PullRequestBranchFlow from "../components/PullRequestBranchFlow";
 
 type Issue = {
   id: number;
@@ -61,6 +62,13 @@ type Review = {
   id: number;
   pr_id: number;
   summary: string;
+  pr_number?: number | null;
+  pr_title?: string | null;
+  pr_author?: string | null;
+  repository?: string | null;
+  source_branch?: string | null;
+  target_branch?: string | null;
+  source_repository?: string | null;
   issues: Issue[];
   fix_commits: FixCommit[];
 };
@@ -375,7 +383,6 @@ export default function ReviewDetail() {
       : fixCommit
         ? 0
         : -1;
-
   const selectedPayload = () => ({
     issue_ids: selectedIssueIds.length > 0 ? selectedIssueIds : eligibleIssueIds,
   });
@@ -559,9 +566,17 @@ export default function ReviewDetail() {
         <div>
           <p className="page-kicker">Review detail</p>
           <h1 className="page-title">Review #{review.id}</h1>
+          {review.pr_title && <p className="review-pr-title">PR #{review.pr_number ?? review.pr_id} · {review.pr_title}</p>}
           <p className="page-description">
             Inspect AI findings, validate suggested changes, and move this review toward green.
           </p>
+          <PullRequestBranchFlow
+            detail
+            repository={review.repository}
+            sourceBranch={review.source_branch}
+            sourceRepository={review.source_repository}
+            targetBranch={review.target_branch}
+          />
           <span className="selected-repository">
             {selectedRepository.full_name}
           </span>

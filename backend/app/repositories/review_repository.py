@@ -43,6 +43,9 @@ def save_review(
             title=pr_data.title,
             repository=pr_data.repository,
             author=pr_data.author,
+            source_branch=pr_data.source_branch,
+            target_branch=pr_data.target_branch,
+            source_repository=pr_data.source_repository,
         )
         db.add(pr)
     else:
@@ -51,6 +54,12 @@ def save_review(
         pr.pull_request_number = pr_data.pull_request_number
         pr.repository = pr_data.repository
         pr.author = pr_data.author
+        if pr_data.source_branch is not None:
+            pr.source_branch = pr_data.source_branch
+        if pr_data.target_branch is not None:
+            pr.target_branch = pr_data.target_branch
+        if pr_data.source_repository is not None:
+            pr.source_repository = pr_data.source_repository
 
     db.flush()
 

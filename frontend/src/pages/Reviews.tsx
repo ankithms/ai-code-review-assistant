@@ -7,6 +7,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { useRepository } from "../context/useRepository";
 import { api } from "../services/api";
+import PullRequestBranchFlow from "../components/PullRequestBranchFlow";
 
 type ReviewRun = {
   review_id: number | null; job_id: number | null; commit_sha: string; run_type: string;
@@ -19,6 +20,8 @@ type PullRequestReview = {
   latest_reviewed_commit_sha?: string | null; latest_review_id?: number | null;
   latest_review_time?: string | null; open_findings: number; resolved_findings: number;
   ignored_findings: number; highest_open_severity?: string | null;
+  source_branch?: string | null; target_branch?: string | null;
+  source_repository?: string | null;
   latest_run?: ReviewRun | null; review_history: ReviewRun[];
 };
 
@@ -91,7 +94,7 @@ export default function Reviews() {
   const filteredPullRequests = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     const matching = pullRequests.filter((pullRequest) =>
-      `${pullRequest.title} ${pullRequest.author} ${pullRequest.pr_number || ""} ${pullRequest.repository}`
+      `${pullRequest.title} ${pullRequest.author} ${pullRequest.pr_number || ""} ${pullRequest.repository} ${pullRequest.source_branch || ""} ${pullRequest.target_branch || ""}`
         .toLowerCase().includes(normalizedSearch) && matchesFilter(pullRequest, filter)
     );
     return [...matching].sort((left, right) => {
@@ -182,7 +185,14 @@ export default function Reviews() {
                   </div>
                   <div>
                     <span className="pr-review-card__eyebrow">PR #{pullRequest.pr_number || pullRequest.pr_id}</span>
-                    <h2>{pullRequest.title}</h2><p>Opened by {pullRequest.author}</p>
+                    <h2>{pullRequest.title}</h2>
+                    <p>Opened by {pullRequest.author}</p>
+                    <PullRequestBranchFlow
+                      repository={pullRequest.repository}
+                      sourceBranch={pullRequest.source_branch}
+                      sourceRepository={pullRequest.source_repository}
+                      targetBranch={pullRequest.target_branch}
+                    />
                   </div>
                 </div>
                 <div className="pr-health-summary">

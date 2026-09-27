@@ -22,6 +22,13 @@ const apiPost = vi.mocked(api.post);
 const review = {
   id: 42,
   pr_id: 101,
+  pr_number: 27,
+  pr_title: "Harden authentication queries",
+  pr_author: "octocat",
+  repository: "openai/reviewer",
+  source_branch: "feature/auth-queries",
+  target_branch: "main",
+  source_repository: "openai/reviewer",
   summary: "One security issue requires attention.",
   issues: [
     {
@@ -116,6 +123,8 @@ describe("ReviewDetail", () => {
     );
 
     expect(await screen.findByText("Review #42")).toBeInTheDocument();
+    expect(screen.getByText("PR #27 · Harden authentication queries")).toBeInTheDocument();
+    expect(screen.getByLabelText("Merging feature/auth-queries into main")).toBeInTheDocument();
     expect(screen.getByText("User input reaches a SQL query.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Generate Fixes" }));

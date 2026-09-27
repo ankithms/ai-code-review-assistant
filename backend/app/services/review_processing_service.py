@@ -180,6 +180,9 @@ def _process_pull_request_review(db, job) -> None:
         title=pull_request["title"],
         repository=job.repository,
         author=pull_request["user"]["login"],
+        source_branch=(pull_request.get("head") or {}).get("ref"),
+        target_branch=(pull_request.get("base") or {}).get("ref"),
+        source_repository=((pull_request.get("head") or {}).get("repo") or {}).get("full_name"),
     )
     pull_request_record = _ensure_pull_request_record(
         db=db,
@@ -188,6 +191,9 @@ def _process_pull_request_review(db, job) -> None:
         github_pr_id=pr_schema.github_pr_id,
         title=pr_schema.title,
         author=pr_schema.author,
+        source_branch=pr_schema.source_branch,
+        target_branch=pr_schema.target_branch,
+        source_repository=pr_schema.source_repository,
     )
     open_issues = get_open_issues_for_pull_request(
         db=db,
@@ -543,6 +549,9 @@ def _ensure_pull_request_record(
     github_pr_id: int,
     title: str,
     author: str,
+    source_branch: str | None = None,
+    target_branch: str | None = None,
+    source_repository: str | None = None,
 ) -> PullRequest:
     repository = get_or_create_repository(db, repository_full_name)
     pull_request = (
@@ -560,6 +569,12 @@ def _ensure_pull_request_record(
     pull_request.title = title
     pull_request.repository = repository_full_name
     pull_request.author = author
+    if source_branch is not None:
+        pull_request.source_branch = source_branch
+    if target_branch is not None:
+        pull_request.target_branch = target_branch
+    if source_repository is not None:
+        pull_request.source_repository = source_repository
     db.flush()
 
     return pull_request

@@ -121,3 +121,6 @@ class PullRequestSchema(BaseModel):
     title: str
     repository: str
     author: str
+    source_branch: str | None = None
+    target_branch: str | None = None
+    source_repository: str | None = None

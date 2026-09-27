@@ -39,6 +39,8 @@ const securityIssue = {
 export const demoReviews = [
   {
     id: 1, pr_id: 101, pr_number: 101, pr_title: "Calculate average cart price",
+    pr_author: "demo-developer", repository: "demo/shop-api",
+    source_branch: "feature/cart-average", target_branch: "main", source_repository: "demo/shop-api",
     review_mode: "Full", created_at: "2026-08-30T09:42:00Z",
     summary: "Cart totals: an empty cart can raise ZeroDivisionError. Add a guard before calculating the average price.",
     issues: [issue],
@@ -55,8 +57,8 @@ export const demoReviews = [
       new_issues: [],
     }],
   },
-  { id: 2, pr_id: 101, pr_number: 101, pr_title: "Calculate average cart price", review_mode: "Incremental", created_at: "2026-09-01T10:00:00Z", summary: "Incremental review: the empty-cart guard addresses the earlier finding. No new issues in the latest change.", issues: [], fix_commits: [] },
-  { id: 4, pr_id: 104, pr_number: 104, pr_title: "Update checkout validation and order lookup", review_mode: "Full", created_at: "2026-09-03T14:18:00Z", summary: "Checkout and order access: an off-by-one stock check rejects valid orders, and an order lookup is missing its ownership filter. Both findings remain open.", issues: [openBug, securityIssue], fix_commits: [{
+  { id: 2, pr_id: 101, pr_number: 101, pr_title: "Calculate average cart price", pr_author: "demo-developer", repository: "demo/shop-api", source_branch: "feature/cart-average", target_branch: "main", source_repository: "demo/shop-api", review_mode: "Incremental", created_at: "2026-09-01T10:00:00Z", summary: "Incremental review: the empty-cart guard addresses the earlier finding. No new issues in the latest change.", issues: [], fix_commits: [] },
+  { id: 4, pr_id: 104, pr_number: 104, pr_title: "Update checkout validation and order lookup", pr_author: "demo-developer", repository: "demo/shop-api", source_branch: "feature/checkout-validation", target_branch: "main", source_repository: "demo/shop-api", review_mode: "Full", created_at: "2026-09-03T14:18:00Z", summary: "Checkout and order access: an off-by-one stock check rejects valid orders, and an order lookup is missing its ownership filter. Both findings remain open.", issues: [openBug, securityIssue], fix_commits: [{
     id: 202, status: "FAILED", validation_status: "FAILED", source_head_sha: "a922ce10",
     author: "AI Code Review Assistant", requested_issue_count: 1, valid_issue_count: 0,
     skipped_issue_count: 1, resolved_issue_count: 0, remaining_issue_count: 0,
@@ -67,13 +69,14 @@ export const demoReviews = [
     issues: [{ issue_id: 3, status: "SKIPPED", generated: true, validated: false, committed: false, original_file: "app/orders.py", original_line: 31, skip_reason: "The generated fix did not pass validation" }],
     new_issues: [],
   }] },
-  { id: 3, pr_id: 103, pr_number: 103, pr_title: "Add pagination to the item list", review_mode: "Full", created_at: "2026-09-02T11:05:00Z", summary: "Pagination: no actionable issues found in the supplied changes.", issues: [], fix_commits: [] },
+  { id: 3, pr_id: 103, pr_number: 103, pr_title: "Add pagination to the item list", pr_author: "demo-developer", repository: "demo/shop-api", source_branch: "feature/item-pagination", target_branch: "develop", source_repository: "demo/shop-api", review_mode: "Full", created_at: "2026-09-02T11:05:00Z", summary: "Pagination: no actionable issues found in the supplied changes.", issues: [], fix_commits: [] },
 ];
 
 export const demoReviewOverviews = [
   {
     pr_id: 104, repository: "demo/shop-api", pr_number: 104,
     title: "Update checkout validation and order lookup", author: "demo-developer",
+    source_branch: "feature/checkout-validation", target_branch: "main", source_repository: "demo/shop-api",
     latest_reviewed_commit_sha: "a922ce10", latest_review_id: 4,
     latest_review_time: "2026-09-03T14:18:00Z", open_findings: 2,
     resolved_findings: 0, ignored_findings: 0, highest_open_severity: "high",
@@ -85,6 +88,7 @@ export const demoReviewOverviews = [
   {
     pr_id: 103, repository: "demo/shop-api", pr_number: 103,
     title: "Add pagination to the item list", author: "demo-developer",
+    source_branch: "feature/item-pagination", target_branch: "develop", source_repository: "demo/shop-api",
     latest_reviewed_commit_sha: "61fe3a9", latest_review_id: 3,
     latest_review_time: "2026-09-02T11:05:00Z", open_findings: 0,
     resolved_findings: 0, ignored_findings: 0, highest_open_severity: null,
@@ -96,6 +100,7 @@ export const demoReviewOverviews = [
   {
     pr_id: 101, repository: "demo/shop-api", pr_number: 101,
     title: "Calculate average cart price", author: "demo-developer",
+    source_branch: "feature/cart-average", target_branch: "main", source_repository: "demo/shop-api",
     latest_reviewed_commit_sha: "c4e18f2a", latest_review_id: 2,
     latest_review_time: "2026-09-01T10:00:00Z", open_findings: 0,
     resolved_findings: 1, ignored_findings: 0, highest_open_severity: null,
@@ -127,9 +132,9 @@ export const demoResponses: Record<string, unknown> = {
   "/repositories/1/reviews/overview": demoReviewOverviews,
   ...Object.fromEntries(demoReviews.map(review => [`/repositories/1/reviews/${review.id}`, review])),
   "/repositories/1/pull-requests": [
-    { id: 101, github_pr_id: 101, pull_request_number: 101, title: "Calculate average cart price", repository: "demo/shop-api", author: "demo-developer", review_id: 1 },
-    { id: 104, github_pr_id: 104, pull_request_number: 104, title: "Update checkout validation and order lookup", repository: "demo/shop-api", author: "demo-developer", review_id: 4 },
-    { id: 103, github_pr_id: 103, pull_request_number: 103, title: "Add pagination to the item list", repository: "demo/shop-api", author: "demo-developer", review_id: 3 },
+    { id: 101, github_pr_id: 101, pull_request_number: 101, title: "Calculate average cart price", repository: "demo/shop-api", author: "demo-developer", source_branch: "feature/cart-average", target_branch: "main", source_repository: "demo/shop-api", review_id: 1 },
+    { id: 104, github_pr_id: 104, pull_request_number: 104, title: "Update checkout validation and order lookup", repository: "demo/shop-api", author: "demo-developer", source_branch: "feature/checkout-validation", target_branch: "main", source_repository: "demo/shop-api", review_id: 4 },
+    { id: 103, github_pr_id: 103, pull_request_number: 103, title: "Add pagination to the item list", repository: "demo/shop-api", author: "demo-developer", source_branch: "feature/item-pagination", target_branch: "develop", source_repository: "demo/shop-api", review_id: 3 },
   ],
   "/repositories/1/analytics": {
     total_ai_reviews: demoReviews.length, total_reviews: demoReviews.length,

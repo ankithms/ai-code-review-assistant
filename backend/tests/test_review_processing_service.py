@@ -415,12 +415,18 @@ class GithubCommentPostingTests(unittest.TestCase):
                 github_pr_id=99,
                 title="Updated title",
                 author="hubot",
+                source_branch="feature/orders",
+                target_branch="main",
+                source_repository="contributor/repo",
             )
 
             session.refresh(existing_pr)
             self.assertEqual(existing_pr.pull_request_number, 42)
             self.assertEqual(existing_pr.title, "Updated title")
             self.assertEqual(existing_pr.author, "hubot")
+            self.assertEqual(existing_pr.source_branch, "feature/orders")
+            self.assertEqual(existing_pr.target_branch, "main")
+            self.assertEqual(existing_pr.source_repository, "contributor/repo")
         finally:
             session.close()
 

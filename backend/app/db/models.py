@@ -46,6 +46,9 @@ class PullRequest(Base):
     title = Column(String(500))
     repository = Column(String(255))
     author = Column(String(255))
+    source_branch = Column(String(255), nullable=True)
+    target_branch = Column(String(255), nullable=True)
+    source_repository = Column(String(255), nullable=True)
 
     repository_ref = relationship(
         "Repository",
@@ -161,6 +164,26 @@ class Review(Base):
     @property
     def pr_title(self):
         return self.pull_request.title if self.pull_request else None
+
+    @property
+    def pr_author(self):
+        return self.pull_request.author if self.pull_request else None
+
+    @property
+    def repository(self):
+        return self.pull_request.repository if self.pull_request else None
+
+    @property
+    def source_branch(self):
+        return self.pull_request.source_branch if self.pull_request else None
+
+    @property
+    def target_branch(self):
+        return self.pull_request.target_branch if self.pull_request else None
+
+    @property
+    def source_repository(self):
+        return self.pull_request.source_repository if self.pull_request else None
 
 
 class Issue(Base):

@@ -38,6 +38,8 @@ def test_overview_groups_reviews_by_pr_and_preserves_current_health(overview_db)
     pull_request = PullRequest(
         repository_ref=repository, github_pr_id=100, pull_request_number=42,
         title="Harden order lookup", repository="owner/repo", author="octocat",
+        source_branch="feature/order-lookup", target_branch="main",
+        source_repository="contributor/repo",
     )
     initial = Review(pull_request=pull_request, summary="Two findings", commit_sha="abc1234", created_at=start)
     incremental = Review(
@@ -79,6 +81,9 @@ def test_overview_groups_reviews_by_pr_and_preserves_current_health(overview_db)
     assert overview.pr_id == pull_request.id
     assert overview.latest_review_id == incremental.id
     assert overview.latest_reviewed_commit_sha == "def5678"
+    assert overview.source_branch == "feature/order-lookup"
+    assert overview.target_branch == "main"
+    assert overview.source_repository == "contributor/repo"
     assert overview.open_findings == 1
     assert overview.resolved_findings == 0
     assert overview.ignored_findings == 1

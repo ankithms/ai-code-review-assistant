@@ -41,6 +41,8 @@ describe("Reviews", () => {
     apiGet.mockResolvedValue({ data: [{
       pr_id: 101, repository: "openai/reviewer", pr_number: 42,
       title: "Harden asynchronous order imports", author: "octocat",
+      source_branch: "feature/order-imports", target_branch: "main",
+      source_repository: "openai/reviewer",
       latest_reviewed_commit_sha: "def567890", latest_review_id: 12,
       latest_review_time: "2026-09-15T08:00:00Z", open_findings: 1,
       resolved_findings: 1, ignored_findings: 1, highest_open_severity: "high",
@@ -58,6 +60,7 @@ describe("Reviews", () => {
     expect(screen.getByText("1 open", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("No new findings")).toBeInTheDocument();
     expect(screen.getByText(/earlier findings remain open/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Merging feature/order-imports into main")).toBeInTheDocument();
   });
 
   it("expands the complete audit trail and links each snapshot to its detail", async () => {

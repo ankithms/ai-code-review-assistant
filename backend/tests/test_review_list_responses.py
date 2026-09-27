@@ -9,6 +9,11 @@ def test_review_list_response_includes_filter_and_display_metadata():
         id=7,
         pull_request_number=42,
         title="Harden order lookup",
+        repository="owner/repo",
+        author="octocat",
+        source_branch="feature/order-lookup",
+        target_branch="main",
+        source_repository="contributor/repo",
     )
     review = Review(
         id=11,
@@ -24,6 +29,11 @@ def test_review_list_response_includes_filter_and_display_metadata():
 
     assert response.pr_number == 42
     assert response.pr_title == "Harden order lookup"
+    assert response.pr_author == "octocat"
+    assert response.repository == "owner/repo"
+    assert response.source_branch == "feature/order-lookup"
+    assert response.target_branch == "main"
+    assert response.source_repository == "contributor/repo"
     assert response.created_at == datetime(2026, 9, 12, tzinfo=UTC)
     assert response.issues[0].severity == "high"
     assert response.issues[0].status.value == "OPEN"

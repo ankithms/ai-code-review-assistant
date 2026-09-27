@@ -4108,6 +4108,47 @@ button:active:not(:disabled),
   font-size: 11px;
 }
 
+.branch-flow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.branch-flow code {
+  overflow: hidden;
+  max-width: 210px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  background: var(--surface-subtle);
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-flow__arrow { flex: 0 0 auto; color: var(--muted); }
+
+.branch-flow--unavailable {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.branch-flow--detail { margin: 10px 0 2px; font-size: 12px; }
+.branch-flow--detail code { max-width: 300px; font-size: 11px; }
+
+.review-pr-title {
+  margin: 5px 0 0;
+  color: var(--text-soft);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .pr-health-summary {
   display: grid;
   justify-items: end;

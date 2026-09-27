@@ -71,6 +71,13 @@ class ReviewDetailResponse(BaseModel):
     id: int
     pr_id: int
     summary: str
+    pr_number: int | None = None
+    pr_title: str | None = None
+    pr_author: str | None = None
+    repository: str | None = None
+    source_branch: str | None = None
+    target_branch: str | None = None
+    source_repository: str | None = None
     issues: list[IssueResponse]
     fix_pull_requests: list[FixPullRequestResponse]
     fix_commits: list[FixCommitResponse]
@@ -113,6 +120,9 @@ class PullRequestResponse(BaseModel):
     title: str
     repository: str
     author: str
+    source_branch: str | None = None
+    target_branch: str | None = None
+    source_repository: str | None = None
 
     model_config = {
         "from_attributes": True
@@ -135,6 +145,11 @@ class ReviewListResponse(BaseModel):
     created_at: datetime
     pr_number: int | None = None
     pr_title: str | None = None
+    pr_author: str | None = None
+    repository: str | None = None
+    source_branch: str | None = None
+    target_branch: str | None = None
+    source_repository: str | None = None
     issues: list[ReviewListIssueResponse] = Field(default_factory=list)
 
     model_config = {
@@ -161,6 +176,9 @@ class PullRequestReviewOverviewResponse(BaseModel):
     pr_number: int | None = None
     title: str
     author: str
+    source_branch: str | None = None
+    target_branch: str | None = None
+    source_repository: str | None = None
     latest_reviewed_commit_sha: str | None = None
     latest_review_id: int | None = None
     latest_review_time: datetime | None = None
