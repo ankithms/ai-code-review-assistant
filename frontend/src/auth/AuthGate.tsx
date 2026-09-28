@@ -62,7 +62,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <div className="auth-glow auth-glow--two" aria-hidden="true" />
         <section className="auth-layout">
           <div className="auth-story">
-            <span className="auth-brand"><span><Sparkles aria-hidden="true" size={19} /></span> Review Lab</span>
+            <span className="auth-brand"><span><Sparkles aria-hidden="true" size={19} /></span> Review Assistant</span>
             <p className="eyebrow">AI code intelligence</p>
             <h1>
               <span>Ship confident code.</span>

@@ -59,13 +59,13 @@ export default function Navbar() {
       <a className="skip-link" href="#main-content">Skip to content</a>
       <nav aria-label="Primary navigation" className="top-nav">
         <div className="top-nav__inner">
-          <Link aria-label="Review Lab dashboard" className="brand" to="/">
+          <Link aria-label="Review Assistant dashboard" className="brand" to="/">
             <span className="brand__mark" aria-hidden="true">
               <Sparkles size={19} strokeWidth={2.25} />
             </span>
 
             <span>
-              <span className="brand__title">Review Lab</span>
+              <span className="brand__title">Review Assistant</span>
               <span className="brand__subtitle">AI code intelligence</span>
             </span>
           </Link>
