@@ -1,5 +1,6 @@
 import { isDemoMode } from "./demo/mode";
-import { ArrowRight, FlaskConical } from "lucide-react";
+import { resetDemoState } from "./demo/adapter";
+import { ArrowRight, FlaskConical, RotateCcw } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   BrowserRouter,
@@ -58,12 +59,23 @@ function App() {
                   Interactive demo
                 </span>
                 <span className="demo-banner__copy">
-                  Sample data · GitHub actions are safely disabled
+                  Synthetic workspace · actions stay in this browser
                 </span>
                 <div className="demo-banner__links">
-                  <Link to="/reviews/4">Open findings <ArrowRight aria-hidden="true" size={14} /></Link>
-                  <Link to="/reviews/1">Successful AI fix</Link>
-                  <Link to="/reviews/3">Clean review</Link>
+                  <Link to="/reviews/4">Try AI fix <ArrowRight aria-hidden="true" size={14} /></Link>
+                  <Link to="/reviews/5">All categories</Link>
+                  <Link to="/reviews/6">Lifecycle</Link>
+                  <Link to="/reviews/1">Verified fix</Link>
+                  <button
+                    className="demo-banner__reset"
+                    onClick={() => {
+                      resetDemoState();
+                      window.location.assign("/demo/");
+                    }}
+                    type="button"
+                  >
+                    <RotateCcw aria-hidden="true" size={13} /> Reset
+                  </button>
                 </div>
               </aside>
             )}

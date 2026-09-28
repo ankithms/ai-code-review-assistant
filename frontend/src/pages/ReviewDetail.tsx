@@ -1,5 +1,5 @@
 import { isDemoMode } from "../demo/mode";
-import { demoDiffs } from "../demo/data";
+import { demoDiffs } from "../demo/orderData";
 import DemoDiff from "../demo/DemoDiff";
 import {
   ArrowLeft,
@@ -391,6 +391,7 @@ export default function ReviewDetail() {
     if (
       selectedRepositoryId === null
       || !fixCommit
+      || isDemoMode()
       || terminalFixStatuses.has(fixCommit.status)
     ) {
       return;
@@ -613,7 +614,7 @@ export default function ReviewDetail() {
           {review.id === 1 && <Link aria-label="See the follow-up review after the fix →" className="link-button button-with-icon" to="/reviews/2">Follow-up review <ChevronRight aria-hidden="true" size={14} /></Link>}
         </div>
         <DemoDiff diff={demoDiffs[review.id]} />
-        <p className="code-panel__note"><Sparkles aria-hidden="true" size={14} /> Suggested replacements appear with each finding below. These illustrative fixes have not been executed.</p>
+        <p className="code-panel__note"><Sparkles aria-hidden="true" size={14} /> Suggested replacements appear with each finding below. Applying them changes only this browser session.</p>
       </section>}
 
       <section className="panel fix-panel fix-workflow">
@@ -622,7 +623,7 @@ export default function ReviewDetail() {
             <p className="page-kicker">AI fix workflow</p>
             <h2 className="panel__title">From finding to verified commit</h2>
             <p className="page-description">
-            {isDemoMode() ? "Live actions are disabled. Explore the saved sample suggestions below." : "Generate structured line-range fixes, preview validation results, then commit them to this Pull Request."}
+            {isDemoMode() ? "Try the complete workflow safely. Demo changes stay in this browser and never reach GitHub." : "Generate structured line-range fixes, preview validation results, then commit them to this Pull Request."}
             </p>
           </div>
           <span className="ai-chip"><WandSparkles aria-hidden="true" size={14} /> AI assisted</span>
@@ -645,7 +646,7 @@ export default function ReviewDetail() {
             type="button"
             className="primary-button button-with-icon"
             onClick={generateFixes}
-            disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
+            disabled={fixLoading || eligibleIssueIds.length === 0}
           >
             {fixLoading ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <WandSparkles aria-hidden="true" size={15} />}
             Generate Fixes
@@ -654,7 +655,7 @@ export default function ReviewDetail() {
             type="button"
             className="secondary-button button-with-icon"
             onClick={previewFixes}
-            disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
+            disabled={fixLoading || eligibleIssueIds.length === 0}
           >
             <Code2 aria-hidden="true" size={15} /> Preview
           </button>
@@ -662,14 +663,14 @@ export default function ReviewDetail() {
             type="button"
             className="danger-button button-with-icon"
             onClick={() => setConfirmOpen(true)}
-            disabled={isDemoMode() || fixLoading || eligibleIssueIds.length === 0}
+            disabled={fixLoading || eligibleIssueIds.length === 0}
           >
-            <GitCommitHorizontal aria-hidden="true" size={15} /> Commit AI Fix
+            <GitCommitHorizontal aria-hidden="true" size={15} /> {isDemoMode() ? "Apply Demo Fix" : "Commit AI Fix"}
           </button>
         </div>
 
         <p aria-live="polite" className="fix-message" role="status">
-          {(isDemoMode() ? "Read-only sample. Suggested code is shown with each finding." : fixMessage) || (
+          {fixMessage || (
             selectedIssueIds.length > 0
               ? `${selectedIssueIds.length} issue${selectedIssueIds.length === 1 ? "" : "s"} selected.`
               : `No selection means all ${eligibleIssueIds.length} eligible finding${eligibleIssueIds.length === 1 ? "" : "s"} are included.`
@@ -758,7 +759,9 @@ export default function ReviewDetail() {
             <p className="page-kicker">Final check</p>
             <h2 id="commit-confirm-title">Commit validated AI fixes?</h2>
             <p>
-              This will apply {selectedIssueIds.length || eligibleIssueIds.length} selected finding{(selectedIssueIds.length || eligibleIssueIds.length) === 1 ? "" : "s"} directly to the pull request branch.
+              {isDemoMode() ? "This will update only your temporary demo session for " : "This will apply "}
+              {selectedIssueIds.length || eligibleIssueIds.length} selected finding{(selectedIssueIds.length || eligibleIssueIds.length) === 1 ? "" : "s"}
+              {isDemoMode() ? ". No repository will be changed." : " directly on the pull request branch."}
             </p>
             <div className="confirm-modal__note">
               <CheckCircle2 aria-hidden="true" size={17} />
@@ -767,7 +770,7 @@ export default function ReviewDetail() {
             <div className="confirm-modal__actions">
               <button autoFocus className="secondary-button" onClick={() => setConfirmOpen(false)} type="button">Cancel</button>
               <button className="danger-button button-with-icon" onClick={commitAiFix} type="button">
-                <GitCommitHorizontal aria-hidden="true" size={15} /> Commit AI Fix
+                <GitCommitHorizontal aria-hidden="true" size={15} /> {isDemoMode() ? "Apply Demo Fix" : "Commit AI Fix"}
               </button>
             </div>
           </section>
@@ -907,7 +910,7 @@ export default function ReviewDetail() {
             </div>
             <div className="finding-toolbar__selection">
               <span aria-live="polite">{selectedIssueIds.length} selected</span>
-              <button className="text-button" disabled={isDemoMode() || eligibleIssueIds.length === 0} onClick={() => setSelectedIssueIds(eligibleIssueIds)} type="button">Select eligible</button>
+              <button className="text-button" disabled={eligibleIssueIds.length === 0} onClick={() => setSelectedIssueIds(eligibleIssueIds)} type="button">Select eligible</button>
               {selectedIssueIds.length > 0 && <button className="text-button" onClick={() => setSelectedIssueIds([])} type="button">Clear</button>}
             </div>
           </div>
@@ -930,7 +933,7 @@ export default function ReviewDetail() {
                       <input
                         type="checkbox"
                         aria-label={`${selectedIssueIds.includes(issue.id) ? "Deselect" : "Select"} issue ${issue.id} for AI fix`}
-                        disabled={isDemoMode() || !issue.eligible_for_fix}
+                        disabled={!issue.eligible_for_fix}
                         checked={selectedIssueIds.includes(issue.id)}
                         onChange={() => toggleIssueSelection(issue)}
                       />
@@ -949,7 +952,7 @@ export default function ReviewDetail() {
                         key={status}
                         type="button"
                         onClick={() => updateIssueStatus(issue.id, status)}
-                        disabled={isDemoMode() || displayStatus === status}
+                        disabled={displayStatus === status}
                         className={
                           displayStatus === status
                             ? "status-button status-button--active"

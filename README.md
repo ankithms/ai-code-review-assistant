@@ -24,7 +24,7 @@ An AI-powered developer tool that automatically reviews GitHub pull requests, an
 * Alembic database migrations
 * FastAPI backend architecture
 * React dashboard with repository analytics and review history
-* Public read-only demo at `/demo/` with illustrative findings and fix suggestions
+* Public, login-free sandbox at `/demo/` with synthetic findings and session-only AI-fix interactions
 
 ## Tech Stack
 
@@ -267,18 +267,19 @@ diffs, and suggested replacements without signing in. Direct links such as
 `/demo/reviews/1` work with the existing Vite and Nginx SPA fallback.
 
 The demo is bundled with the frontend and works without the backend, GitHub,
-or Gemini. Its Axios adapter only serves allowlisted sample GET responses;
-writes and unknown paths fail locally with no network fallback. The live API
-still requires a database-backed administrator session, including generation,
-preview, apply, status updates, and analytics sync. The demo creates no session
-and grants no backend permissions. Leaving the demo reloads the normal app.
+or Gemini. Its Axios adapter serves only allowlisted synthetic responses. It
+simulates finding triage and the generate, preview, apply, and verification
+steps in browser `sessionStorage`; unknown paths fail locally with no network
+fallback. No demo action creates a GitHub comment, commit, webhook, or backend
+request. The live API still requires a database-backed administrator session.
+Leaving the demo reloads the normal app, and **Reset** clears the temporary
+visitor state.
 
-Fixtures in `frontend/src/demo/data.ts` are **hand-authored illustrative data**,
-not real model outputs, usage statistics, or verified fixes. The banner makes
-this explicit. Replace them only with reviewed, sanitized public examples if
-publishing actual results later. Never include private repository content or
-credentials in bundled fixtures. Demo repository selection is stored separately
-from the administrator's selection.
+Fixtures in `frontend/src/demo/orderData.ts` are synthetic examples derived
+from the public order-service demo repository. They are not customer data,
+usage statistics, or live repository content. Never include private source,
+identifiers, webhook payloads, or credentials in bundled fixtures. Demo state
+and repository selection are stored separately from the authenticated app.
 
 For a frontend-only preview, run `cd frontend && pnpm run dev` and visit
 `http://localhost:5173/demo/`. No new credentials or database migrations are

@@ -8,39 +8,44 @@ describe("public demo", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/demo/");
     window.localStorage.clear();
+    window.sessionStorage.clear();
     vi.resetModules();
   });
   afterEach(() => window.history.replaceState({}, "", "/"));
 
-  it("opens without authentication and lets visitors inspect findings without network requests", async () => {
+  it("opens without authentication and runs an isolated AI-fix walkthrough without network requests", async () => {
     const network = vi.spyOn(XMLHttpRequest.prototype, "open");
     const { default: App } = await import("../App");
     render(<App />);
     expect(await screen.findByText("AI Code Review Dashboard")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh statuses" })).toBeDisabled();
-    await userEvent.click(screen.getByRole("link", { name: "Successful AI fix" }));
+    await userEvent.click(screen.getByRole("link", { name: "Verified fix" }));
     expect(await screen.findByText("Review #1")).toBeInTheDocument();
     expect(screen.getByText("Sample code diff")).toBeInTheDocument();
-    expect(screen.getByText(/Handle the empty collection/)).toBeInTheDocument();
+    expect(screen.getByText(/Restore the positive-quantity boundary/)).toBeInTheDocument();
     expect(screen.getByText("Fix activity")).toBeInTheDocument();
-    expect(screen.getAllByText(/c4e18f2/).length).toBeGreaterThan(0);
-    expect(document.querySelectorAll(".demo-diff__line--added").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/31ca2c9/).length).toBeGreaterThan(0);
     expect(document.querySelectorAll(".demo-diff__line--removed").length).toBeGreaterThan(0);
-    for (const name of ["Generate Fixes", "Preview", "Commit AI Fix", "OPEN", "RESOLVED", "IGNORED"]) {
-      expect(screen.getByRole("button", { name })).toBeDisabled();
-    }
     await userEvent.click(screen.getByRole("link", { name: "See the follow-up review after the fix →" }));
     expect(await screen.findByText("Review #2")).toBeInTheDocument();
     expect(screen.getByText("This review did not report any issues.")).toBeInTheDocument();
+    expect(document.querySelectorAll(".demo-diff__line--added").length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole("link", { name: "Pull Requests" }));
-    await userEvent.click(await screen.findByRole("link", { name: "Calculate average cart price" }));
+    await userEvent.click(await screen.findByRole("link", { name: "Reject invalid order quantities" }));
     expect(await screen.findByText("Review #1")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("link", { name: "Open findings" }));
+    await userEvent.click(screen.getByRole("link", { name: "Try AI fix" }));
     expect(await screen.findByText("Review #4")).toBeInTheDocument();
-    expect(screen.getByText("2 Issues")).toBeInTheDocument();
-    expect(screen.getByText(/When requested quantity exactly matches stock/)).toBeInTheDocument();
-    expect(screen.getByText(/The order lookup no longer checks/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Commit AI Fix" })).toBeDisabled();
+    expect(screen.getByText("5 Issues")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Select eligible" }));
+    expect(screen.getByText("5 selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Generate Fixes" }));
+    expect(await screen.findByText("Fixes generated.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByText("Valid preview")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Apply Demo Fix" }));
+    const applyButtons = screen.getAllByRole("button", { name: "Apply Demo Fix" });
+    await userEvent.click(applyButtons[applyButtons.length - 1]);
+    expect((await screen.findAllByText("All issues resolved")).length).toBeGreaterThan(0);
     expect(network).not.toHaveBeenCalled();
   });
 
@@ -51,15 +56,16 @@ describe("public demo", () => {
     expect(await screen.findByText("This review did not report any issues.")).toBeInTheDocument();
   });
 
-  it("rejects writes and unknown URLs without falling back to the live API", async () => {
+  it("keeps demo mutations local and rejects unknown URLs without a live API fallback", async () => {
     const client = axios.create({ adapter: demoAdapter });
-    for (const method of ["post", "patch", "put", "delete"]) {
-      await expect(client.request({ method, url: "/repositories/1/reviews/1/fixes/generate" }))
-        .rejects.toMatchObject({ response: { status: 403 } });
-    }
+    await client.patch("/repositories/1/reviews/issues/507/status", { status: "IGNORED" });
+    const review = await client.get("/repositories/1/reviews/5");
+    expect(review.data.issues.find((finding: { id: number }) => finding.id === 507).status).toBe("IGNORED");
+    await expect(client.post("/repositories/1/unknown", {}))
+      .rejects.toMatchObject({ response: { status: 404 } });
     await expect(client.get("/auth/session")).rejects.toMatchObject({ response: { status: 404 } });
     const first = await client.get("/repositories");
     first.data[0].full_name = "modified";
-    expect((await client.get("/repositories")).data[0].full_name).toBe("demo/shop-api");
+    expect((await client.get("/repositories")).data[0].full_name).toBe("demo/order-service");
   });
 });
