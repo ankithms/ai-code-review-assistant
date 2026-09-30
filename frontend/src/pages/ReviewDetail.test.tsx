@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -137,6 +137,61 @@ describe("ReviewDetail", () => {
       }
     );
     expect(await screen.findByText("Fixes generated.")).toBeInTheDocument();
+  });
+
+  it("shows the loader on Validate & Preview while fixes are being validated", async () => {
+    const user = userEvent.setup();
+    apiPost.mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MemoryRouter initialEntries={["/reviews/42"]}>
+        <RepositoryContext.Provider
+          value={{
+            repositories: [{ id: 7, full_name: "openai/reviewer" }],
+            selectedRepository: { id: 7, full_name: "openai/reviewer" },
+            selectedRepositoryId: 7,
+            setSelectedRepositoryId: vi.fn(),
+            loading: false,
+          }}
+        >
+          <Routes><Route path="/reviews/:id" element={<ReviewDetail />} /></Routes>
+        </RepositoryContext.Provider>
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Review #42");
+    await user.click(screen.getByRole("button", { name: "Validate & Preview" }));
+
+    expect(screen.getByRole("button", { name: "Validate & Preview" }).querySelector(".spin")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Fixes" }).querySelector(".spin")).not.toBeInTheDocument();
+  });
+
+  it("shows the loader on Commit while fixes are being committed", async () => {
+    const user = userEvent.setup();
+    apiPost.mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MemoryRouter initialEntries={["/reviews/42"]}>
+        <RepositoryContext.Provider
+          value={{
+            repositories: [{ id: 7, full_name: "openai/reviewer" }],
+            selectedRepository: { id: 7, full_name: "openai/reviewer" },
+            selectedRepositoryId: 7,
+            setSelectedRepositoryId: vi.fn(),
+            loading: false,
+          }}
+        >
+          <Routes><Route path="/reviews/:id" element={<ReviewDetail />} /></Routes>
+        </RepositoryContext.Provider>
+      </MemoryRouter>
+    );
+
+    await screen.findByText("Review #42");
+    await user.click(screen.getByRole("button", { name: "Commit AI Fix" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Commit AI Fix" }));
+
+    expect(screen.getByRole("button", { name: "Commit AI Fix" }).querySelector(".spin")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Fixes" }).querySelector(".spin")).not.toBeInTheDocument();
   });
 
   it("shows an unsuccessful request as a compact activity event", async () => {

@@ -40,7 +40,7 @@ describe("public demo", () => {
     expect(screen.getByText("5 selected")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Generate Fixes" }));
     expect(await screen.findByText("Fixes generated.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await userEvent.click(screen.getByRole("button", { name: "Validate & Preview" }));
     expect(await screen.findByText("Valid preview")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Apply Demo Fix" }));
     const applyButtons = screen.getAllByRole("button", { name: "Apply Demo Fix" });

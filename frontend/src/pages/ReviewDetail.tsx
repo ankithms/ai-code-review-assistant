@@ -156,6 +156,8 @@ type FixPreview = {
   }[];
 };
 
+type FixAction = "generate" | "preview" | "commit";
+
 const terminalFixStatuses = new Set([
   "REVIEWED",
   "PARTIALLY_RESOLVED",
@@ -251,7 +253,7 @@ export default function ReviewDetail() {
   const [fixPreview, setFixPreview] = useState<FixPreview | null>(null);
   const [fixMessage, setFixMessage] = useState<string | null>(null);
   const [fixCommit, setFixCommit] = useState<FixCommit | null>(null);
-  const [fixLoading, setFixLoading] = useState(false);
+  const [loadingFixAction, setLoadingFixAction] = useState<FixAction | null>(null);
   const [findingFilter, setFindingFilter] = useState<FindingFilter>("all");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reviewLoadErrorKey, setReviewLoadErrorKey] = useState<string | null>(null);
@@ -436,7 +438,7 @@ export default function ReviewDetail() {
       return;
     }
 
-    setFixLoading(true);
+    setLoadingFixAction("generate");
     setFixMessage("Generating fixes...");
     api.post(
       `/repositories/${selectedRepositoryId}/reviews/${id}/fixes/generate`,
@@ -460,7 +462,7 @@ export default function ReviewDetail() {
         setFixMessage("Could not generate fixes.");
       })
       .finally(() => {
-        setFixLoading(false);
+        setLoadingFixAction(null);
       });
   };
 
@@ -469,8 +471,8 @@ export default function ReviewDetail() {
       return;
     }
 
-    setFixLoading(true);
-    setFixMessage("Building preview...");
+    setLoadingFixAction("preview");
+    setFixMessage("Validating fixes and building preview...");
     api.post(
       `/repositories/${selectedRepositoryId}/reviews/${id}/fixes/preview`,
       { ...selectedPayload(), fix_commit_id: fixCommit?.id }
@@ -484,7 +486,7 @@ export default function ReviewDetail() {
         setFixMessage("Could not preview fixes.");
       })
       .finally(() => {
-        setFixLoading(false);
+        setLoadingFixAction(null);
       });
   };
 
@@ -494,7 +496,7 @@ export default function ReviewDetail() {
     }
 
     setConfirmOpen(false);
-    setFixLoading(true);
+    setLoadingFixAction("commit");
     setFixMessage("Committing AI fixes to this pull request...");
     api.post(
       `/repositories/${selectedRepositoryId}/reviews/${id}/fixes/apply`,
@@ -521,7 +523,7 @@ export default function ReviewDetail() {
         );
       })
       .finally(() => {
-        setFixLoading(false);
+        setLoadingFixAction(null);
       });
   };
 
@@ -646,26 +648,26 @@ export default function ReviewDetail() {
             type="button"
             className="primary-button button-with-icon"
             onClick={generateFixes}
-            disabled={fixLoading || eligibleIssueIds.length === 0}
+            disabled={loadingFixAction !== null || eligibleIssueIds.length === 0}
           >
-            {fixLoading ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <WandSparkles aria-hidden="true" size={15} />}
+            {loadingFixAction === "generate" ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <WandSparkles aria-hidden="true" size={15} />}
             Generate Fixes
           </button>
           <button
             type="button"
             className="secondary-button button-with-icon"
             onClick={previewFixes}
-            disabled={fixLoading || eligibleIssueIds.length === 0}
+            disabled={loadingFixAction !== null || eligibleIssueIds.length === 0}
           >
-            <Code2 aria-hidden="true" size={15} /> Preview
+            {loadingFixAction === "preview" ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <Code2 aria-hidden="true" size={15} />} Validate &amp; Preview
           </button>
           <button
             type="button"
             className="danger-button button-with-icon"
             onClick={() => setConfirmOpen(true)}
-            disabled={fixLoading || eligibleIssueIds.length === 0}
+            disabled={loadingFixAction !== null || eligibleIssueIds.length === 0}
           >
-            <GitCommitHorizontal aria-hidden="true" size={15} /> {isDemoMode() ? "Apply Demo Fix" : "Commit AI Fix"}
+            {loadingFixAction === "commit" ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <GitCommitHorizontal aria-hidden="true" size={15} />} {isDemoMode() ? "Apply Demo Fix" : "Commit AI Fix"}
           </button>
         </div>
 
@@ -1041,8 +1043,8 @@ export default function ReviewDetail() {
         <aside aria-label="Selected findings actions" className="selection-dock">
           <span className="selection-dock__count"><strong>{selectedIssueIds.length}</strong> selected</span>
           <span className="selection-dock__copy">Ready for an AI-assisted fix</span>
-          <button className="primary-button button-with-icon" disabled={fixLoading} onClick={generateFixes} type="button">
-            <WandSparkles aria-hidden="true" size={15} /> Generate fixes
+          <button className="primary-button button-with-icon" disabled={loadingFixAction !== null} onClick={generateFixes} type="button">
+            {loadingFixAction === "generate" ? <LoaderCircle aria-hidden="true" className="spin" size={15} /> : <WandSparkles aria-hidden="true" size={15} />} Generate fixes
           </button>
           <button aria-label="Clear selected findings" className="icon-button" onClick={() => setSelectedIssueIds([])} type="button"><X aria-hidden="true" size={17} /></button>
         </aside>
