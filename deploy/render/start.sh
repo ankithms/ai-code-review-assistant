@@ -15,11 +15,29 @@ sed "s/__PORT__/$listen_port/g" \
 
 alembic upgrade head
 
-dramatiq app.tasks.review_tasks --processes 1 --threads 2 &
-worker_pid=$!
-
 uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 api_pid=$!
+
+attempt=0
+until python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/livez", timeout=1)' \
+    >/dev/null 2>&1; do
+    if ! kill -0 "$api_pid" 2>/dev/null; then
+        wait "$api_pid"
+        exit 1
+    fi
+
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 120 ]; then
+        echo "FastAPI did not become healthy within 120 seconds" >&2
+        kill -TERM "$api_pid" 2>/dev/null || true
+        wait "$api_pid" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+done
+
+dramatiq app.tasks.review_tasks --processes 1 --threads 2 &
+worker_pid=$!
 
 nginx -c /tmp/nginx.conf -g 'daemon off;' &
 nginx_pid=$!
