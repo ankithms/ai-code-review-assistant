@@ -11,7 +11,7 @@ from sqlalchemy import (
     Index,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship, synonym
+from sqlalchemy.orm import query_expression, relationship, synonym
 from sqlalchemy.orm import declarative_base
 from datetime import UTC, datetime
 
@@ -49,6 +49,9 @@ class PullRequest(Base):
     source_branch = Column(String(255), nullable=True)
     target_branch = Column(String(255), nullable=True)
     source_repository = Column(String(255), nullable=True)
+    # Read-only field populated by pull-request list queries. It is not a
+    # database column and therefore requires no schema migration.
+    review_id = query_expression()
 
     repository_ref = relationship(
         "Repository",

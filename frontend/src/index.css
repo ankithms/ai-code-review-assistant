@@ -4158,6 +4158,8 @@ button:active:not(:disabled),
 .branch-flow--detail { margin: 10px 0 2px; font-size: 12px; }
 .branch-flow--detail code { max-width: 300px; font-size: 11px; }
 
+.pr-table .branch-flow { margin-top: 0; }
+
 .review-pr-title {
   margin: 5px 0 0;
   color: var(--text-soft);

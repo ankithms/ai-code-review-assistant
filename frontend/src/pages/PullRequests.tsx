@@ -1,18 +1,21 @@
-import { ArrowRight, GitBranch, GitPullRequest, Search, UserRound, X } from "lucide-react";
+import { ArrowRight, GitPullRequest, Search, UserRound, X } from "lucide-react";
 import { Link } from "react-router-dom";
-import { isDemoMode } from "../demo/mode";
+import PullRequestBranchFlow from "../components/PullRequestBranchFlow";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../services/api";
 import { useRepository } from "../context/useRepository";
 
 type PullRequest = {
-  review_id?: number;
+  review_id?: number | null;
   id: number;
   github_pr_id: number;
   pull_request_number: number | null;
   title: string;
   repository: string;
   author: string;
+  source_branch?: string | null;
+  target_branch?: string | null;
+  source_repository?: string | null;
 };
 
 export default function PullRequests() {
@@ -53,7 +56,7 @@ export default function PullRequests() {
   const filteredPrs = useMemo(() => {
     const normalized = search.trim().toLowerCase();
     return prs.filter((pr) =>
-      `${pr.title} ${pr.repository} ${pr.author} ${pr.pull_request_number || ""}`
+      `${pr.title} ${pr.author} ${pr.pull_request_number || ""} ${pr.source_branch || ""} ${pr.target_branch || ""} ${pr.source_repository || ""}`
         .toLowerCase()
         .includes(normalized)
     );
@@ -103,7 +106,7 @@ export default function PullRequests() {
                 aria-label="Search pull requests"
                 className="search-input"
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search pull requests, authors, or numbers"
+                placeholder="Search pull requests, branches, authors, or numbers"
                 type="search"
                 value={search}
               />
@@ -122,7 +125,7 @@ export default function PullRequests() {
               <thead>
                 <tr>
                   <th>Title</th>
-                  <th>Repository</th>
+                  <th>Branches</th>
                   <th>Author</th>
                   <th>GitHub PR</th>
                   <th><span className="sr-only">Open</span></th>
@@ -134,13 +137,18 @@ export default function PullRequests() {
                   <tr key={pr.id} style={{ animationDelay: `${Math.min(index * 40, 200)}ms` }}>
                     <td data-label="Title">
                       <span className="pr-title-icon"><GitPullRequest aria-hidden="true" size={17} /></span>
-                      {isDemoMode() && pr.review_id
+                      {pr.review_id != null
                         ? <Link className="review-title-link" to={`/reviews/${pr.review_id}`}>{pr.title}</Link>
                         : <strong className="pr-title">{pr.title}</strong>}
                       <span className="table-subtitle">#{pr.pull_request_number ?? "—"}</span>
                     </td>
-                    <td data-label="Repository">
-                      <span className="file-path"><GitBranch aria-hidden="true" size={14} />{pr.repository}</span>
+                    <td data-label="Branches">
+                      <PullRequestBranchFlow
+                        repository={pr.repository}
+                        sourceBranch={pr.source_branch}
+                        sourceRepository={pr.source_repository}
+                        targetBranch={pr.target_branch}
+                      />
                     </td>
                     <td data-label="Author"><span className="author-cell"><UserRound aria-hidden="true" size={14} />{pr.author}</span></td>
                     <td data-label="GitHub PR">
@@ -149,7 +157,7 @@ export default function PullRequests() {
                         : <span className="pr-number">#{pr.pull_request_number}</span>}
                     </td>
                     <td className="row-action">
-                      {isDemoMode() && pr.review_id && (
+                      {pr.review_id != null && (
                         <Link aria-label={`Open review for ${pr.title}`} to={`/reviews/${pr.review_id}`}>
                           <ArrowRight aria-hidden="true" size={17} />
                         </Link>
