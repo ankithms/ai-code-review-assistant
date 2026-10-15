@@ -321,3 +321,50 @@ day counts to change the defaults. The review window cannot be shorter than the
 source window. Runs are idempotent. Legal holds are not implemented and require
 suspending this job and preserving the relevant database and backups through an
 external, access-controlled process.
+
+## TraceGrade integration
+
+Each new worker review can record a TraceGrade trace containing the review
+pipeline, diff loading, real model invocations, and GitHub publishing when it
+occurs. Trace attributes include the job ID, repository, PR number and commit.
+Provider callbacks supply actual token usage; estimated cost remains unset.
+Tracing is optional and delivery failures do not fail or repeat a review.
+
+Set these in `backend/.env` and rebuild the backend and worker:
+
+```dotenv
+TRACEGRADE_API_URL=http://host.docker.internal:8000/api/v1
+TRACEGRADE_API_KEY=<TraceGrade project API key>
+TRACEGRADE_CAPTURE_CONTENT=true
+```
+
+The URL above connects Docker on Mac to TraceGrade running on the host's port
+8000. For native Python processes, use `http://localhost:8000/api/v1` instead.
+Keep project keys in the ignored `.env`, never in source control. With content
+capture enabled, prompts and model responses are sent to your TraceGrade
+instance, bounded to its payload limits. Set `TRACEGRADE_CAPTURE_CONTENT=false`
+to record only metadata. Errors store their exception class, without raw provider
+messages. Each retry has a separate trace so attempts can be distinguished.
+
+```bash
+docker compose up -d --build backend worker
+```
+
+Trigger a normal PR review to trace the complete workflow. To verify a real
+provider call against the latest stored PR without publishing GitHub comments
+or changing review-job state:
+
+```bash
+docker compose exec worker python -m scripts.tracegrade_smoke
+# Or choose a stored job:
+docker compose exec worker python -m scripts.tracegrade_smoke --job-id 123
+```
+
+Look for `TraceGrade review trace_id=...` in worker logs and inspect that ID in
+TraceGrade's API docs using the project key. The smoke command calls the real
+configured model and consumes provider usage.
+
+The unpublished TraceGrade 0.1.0 SDK is included as a local dependency in
+`backend/vendor/tracegrade`, copied from the sibling TraceGrade repository's SDK.
+To update it, replace its `src/tracegrade`, `pyproject.toml` and `README.md` from
+that repository, run `uv lock` in `backend`, and rebuild the containers.

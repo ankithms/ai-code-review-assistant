@@ -5,6 +5,8 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
+from langchain_core.callbacks import BaseCallbackHandler
+
 from prometheus_client import Counter, Histogram, start_http_server
 
 
@@ -61,7 +63,7 @@ def model_identity() -> tuple[str, str]:
     )
 
 
-class ModelUsageCallback:
+class ModelUsageCallback(BaseCallbackHandler):
     """LangChain-compatible callback that records provider-reported token usage."""
 
     raise_error = False

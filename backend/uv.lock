@@ -65,6 +65,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "sqlalchemy" },
+    { name = "tracegrade" },
     { name = "tree-sitter" },
     { name = "tree-sitter-javascript" },
     { name = "tree-sitter-typescript" },
@@ -91,6 +92,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "sqlalchemy", specifier = ">=2.0.50" },
+    { name = "tracegrade", directory = "vendor/tracegrade" },
     { name = "tree-sitter", specifier = ">=0.26.0" },
     { name = "tree-sitter-javascript", specifier = ">=0.25.0" },
     { name = "tree-sitter-typescript", specifier = ">=0.23.2" },
@@ -1314,6 +1316,22 @@ sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd
 wheels = [
     { url = "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl", hash = "sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf", size = 78374, upload-time = "2026-02-03T17:35:50.982Z" },
 ]
+
+[[package]]
+name = "tracegrade"
+version = "0.1.0"
+source = { directory = "vendor/tracegrade" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = "==8.3.4" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.9.2" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "tree-sitter"

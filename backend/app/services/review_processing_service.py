@@ -46,6 +46,8 @@ from app.services.suggestion_eligibility_service import (
     issue_has_structured_fix,
 )
 
+from app.tracing import trace_review, traced_operation
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,6 +132,7 @@ def _process_loaded_review_job(db, job) -> None:
         raise
 
 
+@trace_review
 def _process_pull_request_review(db, job) -> None:
     token = os.getenv("GITHUB_ACCESS_TOKEN")
 
@@ -341,6 +344,7 @@ def _build_diff(files: list[dict]) -> str:
     return diff_mapper.annotated_diff()
 
 
+@traced_operation("load diff")
 def _get_files_for_review(job, access_token: str) -> list[dict]:
     if _is_incremental_review_job(job):
         logger.info(
@@ -631,6 +635,7 @@ def _get_file_entry_for_issue(
     return None
 
 
+@traced_operation("publish review")
 def _post_github_comments(
     review,
     files: list[dict],

@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "tracegrade==0.1.0",
     "alembic>=1.18.4",
     "dramatiq[redis]>=1.17.0",
     "fastapi>=0.136.3",
@@ -33,3 +34,6 @@ pythonpath = [
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.uv.sources]
+tracegrade = { path = "vendor/tracegrade" }

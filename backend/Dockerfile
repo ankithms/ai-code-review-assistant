@@ -8,6 +8,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./
+COPY vendor/tracegrade ./vendor/tracegrade
 RUN uv sync --frozen --no-dev
 
 COPY . .

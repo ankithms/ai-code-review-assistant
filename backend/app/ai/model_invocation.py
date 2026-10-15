@@ -8,6 +8,9 @@ from typing import Any
 from app.monitoring import MODEL_INVOCATIONS, MODEL_LATENCY, ModelUsageCallback, model_identity
 
 
+from app.tracing import model_call
+
+
 DEFAULT_AI_MODEL_DEADLINE_SECONDS = 120.0
 
 
@@ -85,10 +88,17 @@ def invoke_with_deadline(
     *,
     timeout_seconds: float | None = None,
 ):
+    with model_call(model_input) as (callback, record):
+        result = _invoke_with_deadline(runnable, model_input, timeout_seconds=timeout_seconds, usage_callback=callback)
+        record(result)
+        return result
+
+
+def _invoke_with_deadline(runnable, model_input, *, timeout_seconds=None, usage_callback=None):
     deadline = timeout_seconds or _model_deadline_seconds()
     provider, model = model_identity()
     started = time.perf_counter()
-    callback_config = {"callbacks": [ModelUsageCallback()]}
+    callback_config = {"callbacks": [ModelUsageCallback(), usage_callback]}
     async_invoke = getattr(runnable, "ainvoke", None)
     if not callable(async_invoke):
         try:
